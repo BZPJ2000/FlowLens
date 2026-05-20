@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import {
   ArrowLeft, FileText, MessageSquare, Pause, Play,
-  Gauge, Search, Map, X, History,
+  Gauge, Search, Map, X, History, FileCode,
 } from "lucide-react";
 import { FlowCanvas, LegendPanel } from "./components/graph";
 import { DetailPanel } from "./components/common";
@@ -11,8 +11,9 @@ import { useGraphStore } from "./stores/graphStore";
 import { api } from "./api/client";
 import ImportPage from "./pages/ImportPage";
 import ReportPage from "./pages/ReportPage";
+import ParsingEnginePage from "./pages/ParsingEnginePage";
 
-type View = "import" | "visualize" | "report";
+type View = "import" | "visualize" | "report" | "parsing";
 
 export default function App() {
   const [view, setView] = useState<View>("import");
@@ -132,6 +133,10 @@ export default function App() {
 
   if (view === "report") {
     return <ReportPage onBack={() => setView("visualize")} />;
+  }
+
+  if (view === "parsing") {
+    return <ParsingEnginePage onBack={() => setView("visualize")} />;
   }
 
   const nodeCount = graph?.nodes.length || 0;
@@ -258,6 +263,16 @@ export default function App() {
           >
             <FileText className="w-3 h-3" />
             <span className="hidden sm:inline">Report</span>
+          </button>
+
+          {/* Parsing Engine button */}
+          <button
+            onClick={() => setView("parsing")}
+            disabled={!isReady}
+            className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-[#1e1e3a] bg-[#12121c] text-[#a1a1aa] hover:text-[#f5f5f7] hover:border-[#2a2a4a] disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+          >
+            <FileCode className="w-3 h-3" />
+            <span className="hidden sm:inline">Files</span>
           </button>
 
           {/* Chat toggle */}

@@ -27,15 +27,15 @@ export function MermaidBlock({ chart, theme = 'default', className }: MermaidBlo
 
     async function render() {
       try {
-        const mermaid = (await import('mermaid')).default
+        const mermaid = (await import(/* @vite-ignore */ 'mermaid')).default
         if (cancelled) return
         mermaid.initialize({ theme, startOnLoad: false })
         const { svg } = await mermaid.render('mermaid-' + Date.now(), chart)
         if (containerRef.current) {
           containerRef.current.innerHTML = svg
         }
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : '渲染失败')
+      } catch {
+        if (!cancelled) setError('Mermaid 未安装，无法渲染图表')
       }
     }
 

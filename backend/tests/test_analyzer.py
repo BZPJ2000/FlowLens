@@ -25,7 +25,7 @@ def test_scan_progress_detail_shows_true_counts_and_truncation():
     assert "非源码/不支持后缀 80 个" in detail
     assert "过滤配置/测试/构建/生成文件 25 个" in detail
     assert "业务源码 215 个" in detail
-    assert "本次 AI 分析 200 个" in detail
+    assert "本次分析 200 个" in detail
     assert "已截断 15 个" in detail
 
 
@@ -43,5 +43,5 @@ def test_scan_progress_detail_says_when_limit_not_hit():
         truncated_files=0,
     )
 
-    assert "本次 AI 分析 17 个" in detail
+    assert "本次分析 17 个" in detail
     assert "未触发 200 上限" in detail

@@ -93,4 +93,79 @@ export const api = {
       `/analyses/${analysisId}/chat`,
       { method: "POST", body: JSON.stringify({ session_id: sessionId || null, message }) }
     ),
+
+  /** 流式聊天 — 使用 fetch + ReadableStream 消费后端 SSE 端点 */
+  async sendMessageStream(
+    analysisId: string,
+    message: string,
+    sessionId: string | null,
+    onChunk: (delta: string) => void,
+    onDone: () => void,
+    onError: (error: string) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    try {
+      const response = await fetch(`${BASE}/analyses/${analysisId}/chat/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, message }),
+        signal,
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(text || `HTTP ${response.status}`);
+      }
+
+      if (!response.body) throw new Error("响应体为空");
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const data = line.slice(6).trim();
+            if (!data) continue;
+
+            try {
+              const evt = JSON.parse(data);
+              if (evt.type === "chunk") {
+                onChunk(evt.delta || "");
+              } else if (evt.type === "done") {
+                onDone();
+                return;
+              } else if (evt.type === "error") {
+                onError(evt.error || "流式错误");
+                return;
+              }
+            } catch {
+              // 忽略无法解析的行
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+
+      // 流结束但没收到 done 事件
+      onDone();
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "未知错误";
+      if (errMsg.includes("aborted") || errMsg.includes("AbortError")) {
+        onDone();
+      } else {
+        onError(errMsg);
+      }
+    }
+  },
 };

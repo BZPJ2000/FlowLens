@@ -53,18 +53,41 @@ bd close <id>         # Complete work
 
 ## Build & Test
 
-_Add your build and test commands here_
-
 ```bash
-# Example:
-# npm install
-# npm test
+# Backend
+cd backend
+pip install -r requirements.txt
+python -m pytest tests/ -v
+
+# Frontend
+cd frontend
+npm install
+npx tsc --noEmit --skipLibCheck
 ```
 
 ## Architecture Overview
 
-_Add a brief overview of your project architecture_
+PoltAIshow — 代码数据流可视化分析平台。导入任意项目源码，自动解析函数/类/数据流，生成可视化数据流图 + 架构报告 + 智能问答。
+
+**目录结构：**
+```
+backend/   — FastAPI + PostgreSQL + Redis, Pydantic 模型, 纯规则分析器
+frontend/  — React 18 + TypeScript + Vite + ReactFlow + TailwindCSS
+```
+
+**核心 Pipeline（Phase 1-2 已完成）：**
+1. `parser.py` — 多语言源码解析（TS/JS/Python/Go/Java/C/C++/C#/Rust/Ruby/Swift/Kotlin/Vue/Svelte/Bash）
+2. `rule_analyzer.py` — 纯规则分析器（Zero LLM），ParseResult → AIFileAnalysis
+3. `graph_builder.py` — 关系构建引擎（import 边、跨文件调用边、端口→函数边）
+4. `analyzer.py` — 分析编排服务，串联所有步骤
+5. `report_generator.py` — Markdown 架构报告生成
+
+**当前开发阶段：** Phase 2 完成（数据库层），Phase 3 待开始（API 层）。
 
 ## Conventions & Patterns
 
-_Add your project-specific conventions here_
+- 文件名按架构角色分类：controller/service/model/util/config/middleware/hook/store/view
+- 所有语言解析用纯正则（零外部依赖），不依赖 tree-sitter
+- 前端 dark theme，色板: bg `#06060a`, accent `#7c3aed`, text `#f5f5f7`
+- Pydantic 模型定义在 `backend/app/models/schemas.py`
+- 数据库用 SQLAlchemy async + PostgreSQL，Repository 模式

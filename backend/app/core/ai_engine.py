@@ -75,10 +75,23 @@ class AIAnalysisEngine:
                 if progress_callback:
                     await progress_callback(completed, total, pr.file_path)
 
-        tasks = [_do(i, pr, c) for i, (pr, c) in enumerate(file_data)]
+        async def _do_safe(i: int, pr: ParseResult, content: str):
+            nonlocal completed
+            async with sem:
+                try:
+                    result = await self.analyze_file(pr, content)
+                except Exception:
+                    result = self._fallback_analysis(pr)
+            async with lock:
+                results[i] = result
+                completed += 1
+                if progress_callback:
+                    await progress_callback(completed, total, pr.file_path)
+
+        tasks = [_do_safe(i, pr, c) for i, (pr, c) in enumerate(file_data)]
         await asyncio.gather(*tasks, return_exceptions=True)
 
-        return [r for r in results if r is not None]
+        return [r for r in results if r is not None and not isinstance(r, Exception)]
 
     # ── 架构总结 ───────────────────────────────
 
@@ -160,6 +173,51 @@ class AIAnalysisEngine:
         content = response.choices[0].message.content or ""
         return content
 
+    async def _call_llm_stream(
+        self, messages: list[dict], temperature: float = 0.4, max_tokens: int = 1500
+    ):
+        """流式调用 LLM，返回 async generator，逐 token yield SSE 数据行"""
+        import litellm
+
+        kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "timeout": 120,
+            "stream": True,
+        }
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
+        if self.base_url:
+            kwargs["api_base"] = self.base_url
+
+        try:
+            response = await litellm.acompletion(**kwargs)
+            async for chunk in response:
+                delta = chunk.choices[0].delta
+                if delta and delta.content:
+                    yield f"data: {json.dumps({'type': 'chunk', 'delta': delta.content})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+    async def stream_chat(
+        self, user_message: str, context: str, chat_history: list[dict]
+    ):
+        """流式对话接口 — 返回 async generator，逐 token 产生 SSE 事件"""
+        messages = [{"role": "system", "content": CHAT_SYSTEM}]
+        messages.extend(chat_history[-10:])
+        messages.append({
+            "role": "user",
+            "content": (
+                f"## 项目结构分析数据\n\n{context}\n\n"
+                f"## 用户问题\n{user_message}\n\n请基于项目数据回答。"
+            ),
+        })
+        async for sse_data in self._call_llm_stream(messages, temperature=0.4, max_tokens=1500):
+            yield sse_data
+
     # ── 响应解析 ───────────────────────────────
 
     def _parse_response(self, raw: str, file_path: str) -> AIFileAnalysis:
@@ -189,15 +247,21 @@ class AIAnalysisEngine:
             except json.JSONDecodeError:
                 return AIFileAnalysis(file_path=file_path, summary="JSON 解析失败")
 
+        # 防御性提取：LLM 可能返回 "inputs": null 而不是 "inputs": []
+        # dict.get(k, default) 只在 key 缺失时使用 default，key 存在但值为 None 时返回 None
+        raw_inputs = data.get("inputs") or []
+        raw_outputs = data.get("outputs") or []
+        raw_structures = data.get("internal_structures") or []
+
         return AIFileAnalysis(
             file_path=file_path,
-            summary=str(data.get("summary", "")),
-            detail=str(data.get("detail", "")),
-            inputs=[AIInputOutput(**i) for i in data.get("inputs", [])],
-            outputs=[AIInputOutput(**o) for o in data.get("outputs", [])],
-            internal_structures=data.get("internal_structures", []),
-            architecture_role=str(data.get("architecture_role", "other")),
-            dependencies_summary=str(data.get("dependencies_summary", "")),
+            summary=str(data.get("summary") or ""),
+            detail=str(data.get("detail") or ""),
+            inputs=[AIInputOutput(**i) for i in raw_inputs],
+            outputs=[AIInputOutput(**o) for o in raw_outputs],
+            internal_structures=raw_structures,
+            architecture_role=str(data.get("architecture_role") or "other"),
+            dependencies_summary=str(data.get("dependencies_summary") or ""),
         )
 
     # ── 降级分析 ───────────────────────────────

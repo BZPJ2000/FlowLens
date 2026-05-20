@@ -561,8 +561,11 @@ export function computeLayout(
     const isCrossFile = e.source_node_id !== e.target_node_id;
 
     if (isCrossFile) {
-      // Cross-file: always file→file
-      srcId = e.source_node_id; tgtId = e.target_node_id;
+      if (e.edge_type === "call" && e.source_function_id && e.target_function_id) {
+        srcId = e.source_function_id; tgtId = e.target_function_id;
+      } else {
+        srcId = e.source_node_id; tgtId = e.target_node_id;
+      }
     } else if (e.edge_type === "port_to_function") {
       srcId = e.source_node_id; tgtId = e.target_function_id;
     } else if (e.edge_type === "function_to_port") {
@@ -587,12 +590,24 @@ export function computeLayout(
     const isCrossFile = e.source_node_id !== e.target_node_id;
 
     if (isCrossFile) {
-      // ── Cross-file edges: ONLY connect file node ports ──
-      // Never connect directly to internal functions across files
-      sourceId = e.source_node_id;
-      targetId = e.target_node_id;
-      sourceHandle = e.source_port_id || "out";
-      targetHandle = e.target_port_id || "in";
+      // ── Cross-file edges ──
+      if (e.edge_type === "call" && e.source_function_id && e.target_function_id) {
+        // Cross-file CALL: connect function→function if both exist as sub-nodes
+        const srcFnExists = existingIds.has(e.source_function_id);
+        const tgtFnExists = existingIds.has(e.target_function_id);
+        sourceId = srcFnExists ? e.source_function_id : e.source_node_id;
+        targetId = tgtFnExists ? e.target_function_id : e.target_node_id;
+        sourceHandle = "out";
+        targetHandle = tgtFnExists
+          ? resolveTargetHandle(e.target_function_id, e.variable_name, fnParamsMap)
+          : (e.target_port_id || "in");
+      } else {
+        // Cross-file IMPORT: connect file node ports
+        sourceId = e.source_node_id;
+        targetId = e.target_node_id;
+        sourceHandle = e.source_port_id || "out";
+        targetHandle = e.target_port_id || "in";
+      }
     } else {
       // ── Intra-file edges: connect ports ↔ functions within same file ──
       if (e.edge_type === "port_to_function") {

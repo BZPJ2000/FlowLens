@@ -107,7 +107,10 @@ class CodeParser:
     MVP 阶段使用正则（零依赖，0 token 消耗），后续可升级为 tree-sitter。
     """
 
-    SUPPORTED_LANGS = {"typescript", "javascript", "python", "go", "rust", "java"}
+    SUPPORTED_LANGS = {
+        "typescript", "javascript", "python", "go", "rust", "java",
+        "c", "cpp", "csharp", "ruby", "swift", "kotlin", "vue", "svelte", "bash",
+    }
 
     def scan_project(self, root_dir: str) -> tuple[list[ParseResult], SourceScanStats]:
         """扫描并解析业务源码文件，返回解析结果和过滤统计。"""
@@ -324,6 +327,25 @@ class CodeParser:
             return self._extract_ts_imports(content)
         elif lang == "python":
             return self._extract_py_imports(content)
+        elif lang == "go":
+            return self._extract_go_imports(content)
+        elif lang in ("java", "kotlin"):
+            return self._extract_java_imports(content)
+        elif lang in ("c", "cpp"):
+            return self._extract_c_imports(content)
+        elif lang == "csharp":
+            return self._extract_cs_imports(content)
+        elif lang == "rust":
+            return self._extract_rust_imports(content)
+        elif lang == "ruby":
+            return self._extract_ruby_imports(content)
+        elif lang == "swift":
+            return self._extract_swift_imports(content)
+        elif lang in ("vue", "svelte"):
+            script = self._extract_vue_svelte_script(content)
+            return self._extract_ts_imports(script) if script else []
+        elif lang == "bash":
+            return self._extract_bash_imports(content)
         return []
 
     def _extract_ts_imports(self, content: str) -> list[ImportInfo]:
@@ -434,6 +456,25 @@ class CodeParser:
             return self._extract_ts_exports(content)
         elif lang == "python":
             return self._extract_py_exports(content)
+        elif lang == "go":
+            return self._extract_go_exports(content)
+        elif lang in ("java", "kotlin"):
+            return self._extract_java_exports(content)
+        elif lang in ("c", "cpp"):
+            return self._extract_c_exports(content)
+        elif lang == "csharp":
+            return self._extract_cs_exports(content)
+        elif lang == "rust":
+            return self._extract_rust_exports(content)
+        elif lang == "ruby":
+            return self._extract_ruby_exports(content)
+        elif lang == "swift":
+            return self._extract_swift_exports(content)
+        elif lang in ("vue", "svelte"):
+            script = self._extract_vue_svelte_script(content)
+            return self._extract_ts_exports(script) if script else []
+        elif lang == "bash":
+            return self._extract_bash_exports(content)
         return []
 
     def _extract_ts_exports(self, content: str) -> list[ExportInfo]:
@@ -485,6 +526,25 @@ class CodeParser:
             return self._extract_ts_functions(content)
         elif lang == "python":
             return self._extract_py_functions(content)
+        elif lang == "go":
+            return self._extract_go_functions(content)
+        elif lang in ("java", "kotlin"):
+            return self._extract_java_functions(content)
+        elif lang in ("c", "cpp"):
+            return self._extract_c_functions(content)
+        elif lang == "csharp":
+            return self._extract_cs_functions(content)
+        elif lang == "rust":
+            return self._extract_rust_functions(content)
+        elif lang == "ruby":
+            return self._extract_ruby_functions(content)
+        elif lang == "swift":
+            return self._extract_swift_functions(content)
+        elif lang in ("vue", "svelte"):
+            script = self._extract_vue_svelte_script(content)
+            return self._extract_ts_functions(script) if script else []
+        elif lang == "bash":
+            return self._extract_bash_functions(content)
         return []
 
     def _extract_ts_functions(self, content: str) -> list[FunctionSignature]:
@@ -560,6 +620,23 @@ class CodeParser:
             return self._extract_ts_classes(content)
         elif lang == "python":
             return self._extract_py_classes(content)
+        elif lang == "go":
+            return self._extract_go_classes(content)
+        elif lang in ("java", "kotlin"):
+            return self._extract_java_classes(content)
+        elif lang in ("c", "cpp"):
+            return self._extract_c_classes(content)
+        elif lang == "csharp":
+            return self._extract_cs_classes(content)
+        elif lang == "rust":
+            return self._extract_rust_classes(content)
+        elif lang == "ruby":
+            return self._extract_ruby_classes(content)
+        elif lang == "swift":
+            return self._extract_swift_classes(content)
+        elif lang in ("vue", "svelte"):
+            script = self._extract_vue_svelte_script(content)
+            return self._extract_ts_classes(script) if script else []
         return []
 
     def _extract_ts_classes(self, content: str) -> list[ClassDefinition]:
@@ -611,6 +688,25 @@ class CodeParser:
     def _extract_calls(self, content: str, lang: str) -> list[FunctionCall]:
         if lang == "python":
             return self._extract_py_calls(content)
+        elif lang in ("typescript", "javascript"):
+            return self._extract_ts_calls(content)
+        elif lang == "go":
+            return self._extract_go_calls(content)
+        elif lang in ("java", "kotlin"):
+            return self._extract_java_calls(content)
+        elif lang == "csharp":
+            return self._extract_cs_calls(content)
+        elif lang == "rust":
+            return self._extract_rust_calls(content)
+        elif lang in ("c", "cpp"):
+            return self._extract_c_calls(content)
+        elif lang == "ruby":
+            return self._extract_ruby_calls(content)
+        elif lang == "swift":
+            return self._extract_swift_calls(content)
+        elif lang in ("vue", "svelte"):
+            script = self._extract_vue_svelte_script(content)
+            return self._extract_ts_calls(script) if script else []
         return []
 
     def _extract_py_calls(self, content: str) -> list[FunctionCall]:
@@ -672,6 +768,693 @@ class CodeParser:
                     return ""
 
         CallVisitor().visit(tree)
+        return calls
+
+    # ── Go 提取 ────────────────────────────────
+
+    def _extract_go_imports(self, content: str) -> list[ImportInfo]:
+        clean = self._strip_comments(content)
+        imports = []
+        for m in re.finditer(r'import\s+"([^"]+)"', clean):
+            pkg = m.group(1)
+            imports.append(ImportInfo(
+                variable_name=pkg.rsplit("/", 1)[-1],
+                source_module=pkg,
+                import_type="named",
+            ))
+        for m in re.finditer(r'import\s*\(\s*([^)]+)\)', clean):
+            for pm in re.finditer(r'"([^"]+)"', m.group(1)):
+                pkg = pm.group(1)
+                imports.append(ImportInfo(
+                    variable_name=pkg.rsplit("/", 1)[-1],
+                    source_module=pkg,
+                    import_type="named",
+                ))
+        return imports
+
+    def _extract_go_functions(self, content: str) -> list[FunctionSignature]:
+        clean = self._strip_comments(content)
+        funcs = []
+        for m in re.finditer(
+            r'func\s+(\w+)\s*\(([^)]*)\)\s*((?:\([^)]*\)|\S+)?)',
+            clean,
+        ):
+            name = m.group(1)
+            params = []
+            for p in m.group(2).split(","):
+                p = p.strip()
+                if p:
+                    parts = p.rsplit(None, 1)
+                    params.append({"name": parts[0], "type": parts[1] if len(parts) == 2 else "unknown"})
+            funcs.append(FunctionSignature(
+                name=name,
+                params=params,
+                return_type=m.group(3).strip() or "unknown",
+                is_exported=name[0].isupper() if name else False,
+            ))
+        return funcs
+
+    def _extract_go_classes(self, content: str) -> list[ClassDefinition]:
+        clean = self._strip_comments(content)
+        classes = []
+        for m in re.finditer(r'type\s+(\w+)\s+(struct|interface)\s*\{', clean):
+            classes.append(ClassDefinition(
+                name=m.group(1),
+                methods=[],
+                is_exported=m.group(1)[0].isupper(),
+            ))
+        return classes
+
+    def _extract_go_exports(self, content: str) -> list[ExportInfo]:
+        clean = self._strip_comments(content)
+        exports = []
+        seen = set()
+        for m in re.finditer(r'func\s+([A-Z]\w*)\s*\(', clean):
+            name = m.group(1)
+            if name not in seen:
+                seen.add(name)
+                exports.append(ExportInfo(variable_name=name, is_function=True))
+        for m in re.finditer(r'type\s+([A-Z]\w*)\s+(struct|interface)\s*\{', clean):
+            name = m.group(1)
+            if name not in seen:
+                seen.add(name)
+                exports.append(ExportInfo(variable_name=name, is_class=True))
+        for m in re.finditer(r'(?:var|const)\s+([A-Z]\w*)\s*[=\[\{]', clean):
+            name = m.group(1)
+            if name not in seen:
+                seen.add(name)
+                exports.append(ExportInfo(variable_name=name))
+        return exports
+
+    def _extract_go_calls(self, content: str) -> list[FunctionCall]:
+        clean = self._strip_comments(content)
+        _go_builtins = {'if','for','switch','return','func','len','make','append',
+                        'new','cap','close','delete','panic','recover','print','println',
+                        'go','defer','range','select','case','map','chan','type','import','package'}
+        return self._extract_generic_calls(clean, _go_builtins)
+
+    # ── Java/Kotlin 提取 ──────────────────────
+
+    def _extract_java_imports(self, content: str) -> list[ImportInfo]:
+        clean = self._strip_comments(content)
+        imports = []
+        for m in re.finditer(r'import\s+(static\s+)?([\w.*]+)[ \t]*;?', clean):
+            full = m.group(2)
+            name = full.rsplit(".", 1)[-1]
+            imports.append(ImportInfo(
+                variable_name=name if name != "*" else full.rsplit(".", 1)[0],
+                source_module=full,
+                import_type="static" if m.group(1) else "named",
+            ))
+        return imports
+
+    def _extract_java_functions(self, content: str) -> list[FunctionSignature]:
+        clean = self._strip_comments(content)
+        funcs = []
+        # Java: public static ReturnType name(params) {
+        for m in re.finditer(
+            r'(?:public|private|protected)\s+(?:static\s+)?(?:final\s+)?'
+            r'(?:<[^>]*>\s*)?(\w+(?:\[\])?(?:\s*<[^>]*>)?)\s+(\w+)\s*\(([^)]*)\)',
+            clean,
+        ):
+            rtype, name, pstr = m.group(1), m.group(2), m.group(3)
+            params = []
+            for p in pstr.split(","):
+                p = p.strip()
+                if p:
+                    parts = p.strip().split()
+                    params.append({"name": parts[-1] if parts else p,
+                                   "type": " ".join(parts[:-1]) if len(parts) > 1 else p})
+            funcs.append(FunctionSignature(
+                name=name, params=params, return_type=rtype,
+                is_exported=True,  # public = exported
+            ))
+        # Kotlin: fun name(params): Type {
+        for m in re.finditer(r'fun\s+(\w+)\s*\(([^)]*)\)\s*(?::\s*(\S+))?', clean):
+            name, pstr, rtype = m.group(1), m.group(2), m.group(3) or "Unit"
+            params = []
+            for p in pstr.split(","):
+                p = p.strip()
+                if p:
+                    if ":" in p:
+                        pname, _, ptype = p.partition(":")
+                        params.append({"name": pname.strip(), "type": ptype.strip() or "unknown"})
+                    else:
+                        params.append({"name": p, "type": "unknown"})
+            funcs.append(FunctionSignature(
+                name=name, params=params, return_type=rtype,
+                is_exported=True,  # Kotlin default is public
+            ))
+        return funcs
+
+    def _extract_java_classes(self, content: str) -> list[ClassDefinition]:
+        clean = self._strip_comments(content)
+        classes = []
+        # Java: public class Name / class Name
+        for m in re.finditer(
+            r'(?:public|private|protected|abstract|final)\s+'
+            r'(?:static\s+)?class\s+(\w+)',
+            clean,
+        ):
+            classes.append(ClassDefinition(
+                name=m.group(1), methods=[], is_exported=True,
+            ))
+        # Simple class without modifier (package-private)
+        for m in re.finditer(r'(?<!\w)(?:class|interface)\s+(\w+)', clean):
+            if not any(c.name == m.group(1) for c in classes):
+                classes.append(ClassDefinition(
+                    name=m.group(1), methods=[], is_exported=False,
+                ))
+        # Kotlin: class/object/interface/data class/enum class
+        for m in re.finditer(
+            r'(?:data\s+|sealed\s+|enum\s+)?(?:class|object|interface)\s+(\w+)',
+            clean,
+        ):
+            if not any(c.name == m.group(1) for c in classes):
+                classes.append(ClassDefinition(
+                    name=m.group(1), methods=[], is_exported=True,
+                ))
+        return classes
+
+    def _extract_java_exports(self, content: str) -> list[ExportInfo]:
+        clean = self._strip_comments(content)
+        exports = []
+        seen = set()
+        # Java public methods
+        for m in re.finditer(
+            r'public\s+(?:static\s+)?(?:final\s+)?\w+(?:<[^>]*>)?\s+(\w+)\s*\(', clean):
+            name = m.group(1)
+            if name not in seen:
+                seen.add(name)
+                exports.append(ExportInfo(variable_name=name, is_function=True))
+        # Java public classes
+        for m in re.finditer(r'public\s+class\s+(\w+)', clean):
+            name = m.group(1)
+            if name not in seen:
+                seen.add(name)
+                exports.append(ExportInfo(variable_name=name, is_class=True))
+        # Kotlin fun/class (default public)
+        for m in re.finditer(r'fun\s+(\w+)\s*\(', clean):
+            name = m.group(1)
+            if name not in seen:
+                seen.add(name)
+                exports.append(ExportInfo(variable_name=name, is_function=True))
+        return exports
+
+    def _extract_java_calls(self, content: str) -> list[FunctionCall]:
+        clean = self._strip_comments(content)
+        _java_keywords = {'if','else','while','for','switch','case','return','throw',
+                          'new','try','catch','finally','import','package','class',
+                          'synchronized','instanceof','super','this','break','continue'}
+        return self._extract_generic_calls(clean, _java_keywords)
+
+    # ── C/C++ 提取 ────────────────────────────
+
+    def _extract_c_imports(self, content: str) -> list[ImportInfo]:
+        clean = self._strip_comments(content)
+        imports = []
+        # #include <foo.h> and #include "foo.h"
+        for m in re.finditer(r'#include\s+[<"]([^>"]+)[>"]', clean):
+            path = m.group(1)
+            name = path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].rsplit(".", 1)[0]
+            imports.append(ImportInfo(
+                variable_name=name, source_module=path, import_type="include",
+            ))
+        # C++ using namespace / using declarations
+        for m in re.finditer(r'using\s+(?:namespace\s+)?([\w:]+)\s*;', clean):
+            name = m.group(1).split("::")[-1]
+            imports.append(ImportInfo(
+                variable_name=name, source_module=m.group(1), import_type="using",
+            ))
+        return imports
+
+    _C_KEYWORDS = {'if','else','while','for','switch','case','return','goto',
+                   'sizeof','break','continue','default','do','typedef','extern',
+                   'static','const','volatile','register','auto','struct','enum','union'}
+
+    def _extract_c_functions(self, content: str) -> list[FunctionSignature]:
+        clean = self._strip_comments(content)
+        funcs = []
+        for m in re.finditer(
+            # Return type + name(params) { or ; — multiline aware
+            r'^\s*((?:(?:const|unsigned|signed|volatile|static|inline|extern|virtual)\s+)*'
+            r'(?:\w+(?:::)?\s*(?:\*|\&)*\s*)+?)(\w+)\s*\(([^)]*)\)\s*(?:const\s*)?[\{;]',
+            clean, re.MULTILINE,
+        ):
+            name = m.group(2)
+            if name in self._C_KEYWORDS or name.startswith("_"):
+                continue
+            rtype = m.group(1).strip()
+            is_static = 'static' in m.group(1)
+            # Parse C-style params: Type name, Type2 name2
+            params = []
+            for p in m.group(3).split(","):
+                p = p.strip()
+                if not p or p == "void":
+                    continue
+                parts = p.strip().split()
+                if parts:
+                    params.append({"name": parts[-1].lstrip("*"),
+                                   "type": " ".join(parts[:-1]) if len(parts) > 1 else "unknown"})
+            funcs.append(FunctionSignature(
+                name=name, params=params, return_type=rtype,
+                is_exported=not is_static,
+            ))
+        return funcs
+
+    def _extract_c_classes(self, content: str) -> list[ClassDefinition]:
+        clean = self._strip_comments(content)
+        classes = []
+        seen = set()
+        # C struct/union/enum and C++ class/struct
+        for m in re.finditer(r'(?:typedef\s+)?(?:struct|union|enum|class)\s+(\w+)\s*(?::[^{]*)?\{', clean):
+            name = m.group(1)
+            if name not in seen:
+                seen.add(name)
+                classes.append(ClassDefinition(
+                    name=name, methods=[], is_exported=True,
+                ))
+        return classes
+
+    def _extract_c_exports(self, content: str) -> list[ExportInfo]:
+        clean = self._strip_comments(content)
+        exports = []
+        seen = set()
+        # Non-static function declarations/prototypes
+        for m in re.finditer(
+            r'^\s*(?:const\s+)?(?:\w+(?:::)?\s*(?:\*|\&)*\s+)+\**(\w+)\s*\([^)]*\)\s*;',
+            clean, re.MULTILINE,
+        ):
+            name = m.group(1)
+            if name not in self._C_KEYWORDS and name not in seen:
+                seen.add(name)
+                exports.append(ExportInfo(variable_name=name, is_function=True))
+        return exports
+
+    def _extract_c_calls(self, content: str) -> list[FunctionCall]:
+        clean = self._strip_comments(content)
+        return self._extract_generic_calls(clean, self._C_KEYWORDS)
+
+    # ── C# 提取 ───────────────────────────────
+
+    def _extract_cs_imports(self, content: str) -> list[ImportInfo]:
+        clean = self._strip_comments(content)
+        imports = []
+        for m in re.finditer(r'using\s+(static\s+)?([\w.]+)\s*;', clean):
+            full = m.group(2)
+            name = full.rsplit(".", 1)[-1]
+            imports.append(ImportInfo(
+                variable_name=name, source_module=full,
+                import_type="using_static" if m.group(1) else "using",
+            ))
+        return imports
+
+    def _extract_cs_functions(self, content: str) -> list[FunctionSignature]:
+        clean = self._strip_comments(content)
+        funcs = []
+        for m in re.finditer(
+            r'(?:public|private|protected|internal)\s+(?:static\s+)?'
+            r'(?:async\s+)?(?:virtual\s+|override\s+|abstract\s+)?'
+            r'(\w+(?:<[^>]*>)?)\s+(\w+)\s*\(([^)]*)\)',
+            clean,
+        ):
+            rtype, name, pstr = m.group(1), m.group(2), m.group(3)
+            params = []
+            for p in pstr.split(","):
+                p = p.strip()
+                if p:
+                    parts = p.strip().split()
+                    params.append({"name": parts[-1] if parts else p,
+                                   "type": " ".join(parts[:-1]) if len(parts) > 1 else "unknown"})
+            funcs.append(FunctionSignature(
+                name=name, params=params, return_type=rtype, is_exported=True,
+            ))
+        return funcs
+
+    def _extract_cs_classes(self, content: str) -> list[ClassDefinition]:
+        clean = self._strip_comments(content)
+        classes = []
+        for m in re.finditer(
+            r'(?:public|private|protected|internal)\s+(?:static\s+)?'
+            r'(?:abstract\s+|sealed\s+|partial\s+)?(?:class|struct|interface|enum|record)\s+(\w+)',
+            clean,
+        ):
+            classes.append(ClassDefinition(
+                name=m.group(1), methods=[], is_exported=True,
+            ))
+        return classes
+
+    def _extract_cs_exports(self, content: str) -> list[ExportInfo]:
+        clean = self._strip_comments(content)
+        exports = []
+        seen = set()
+        for m in re.finditer(
+            r'public\s+(?:static\s+)?\w+(?:<[^>]*>)?\s+(\w+)\s*\(', clean):
+            name = m.group(1)
+            if name not in seen:
+                seen.add(name)
+                exports.append(ExportInfo(variable_name=name, is_function=True))
+        for m in re.finditer(r'public\s+(?:class|struct|interface|enum|record)\s+(\w+)', clean):
+            name = m.group(1)
+            if name not in seen:
+                seen.add(name)
+                exports.append(ExportInfo(variable_name=name, is_class=True))
+        return exports
+
+    def _extract_cs_calls(self, content: str) -> list[FunctionCall]:
+        clean = self._strip_comments(content)
+        _cs_keywords = {'if','else','while','for','foreach','switch','case','return',
+                        'throw','new','try','catch','finally','using','namespace','class',
+                        'typeof','sizeof','is','as','lock','break','continue','in','out','ref'}
+        return self._extract_generic_calls(clean, _cs_keywords)
+
+    # ── Rust 提取 ─────────────────────────────
+
+    def _extract_rust_imports(self, content: str) -> list[ImportInfo]:
+        clean = self._strip_comments(content)
+        imports = []
+        # use std::collections::HashMap;
+        for m in re.finditer(r'use\s+([\w:]+(?:\s*::\s*\{[^}]*\})?)\s*;', clean):
+            full = m.group(1)
+            name = full.split("::")[-1].strip()
+            imports.append(ImportInfo(
+                variable_name=name, source_module=full, import_type="use",
+            ))
+        # mod name;
+        for m in re.finditer(r'mod\s+(\w+)\s*;', clean):
+            imports.append(ImportInfo(
+                variable_name=m.group(1), source_module=m.group(1), import_type="mod",
+            ))
+        return imports
+
+    def _extract_rust_functions(self, content: str) -> list[FunctionSignature]:
+        clean = self._strip_comments(content)
+        funcs = []
+        for m in re.finditer(
+            r'(pub(?:\(\w+\))?\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+(\w+)'
+            r'\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?:->\s*([^{;]+))?',
+            clean,
+        ):
+            is_pub = bool(m.group(1))
+            name = m.group(2)
+            rtype = (m.group(4) or "()").strip()
+            params = []
+            for p in m.group(3).split(","):
+                p = p.strip()
+                if not p or p == "self" or p == "&self" or p == "&mut self":
+                    continue
+                if ":" in p:
+                    pname, _, ptype = p.partition(":")
+                    params.append({"name": pname.strip(), "type": ptype.strip() or "unknown"})
+                else:
+                    params.append({"name": p, "type": "unknown"})
+            funcs.append(FunctionSignature(
+                name=name, params=params, return_type=rtype, is_exported=is_pub,
+            ))
+        return funcs
+
+    def _extract_rust_classes(self, content: str) -> list[ClassDefinition]:
+        clean = self._strip_comments(content)
+        classes = []
+        for m in re.finditer(
+            r'(pub(?:\(\w+\))?\s+)?(struct|enum|trait|impl)\s+(\w+)',
+            clean,
+        ):
+            class_type = m.group(2)
+            if class_type == "impl":
+                continue  # impl blocks are method implementations, not type definitions
+            classes.append(ClassDefinition(
+                name=m.group(3), methods=[], is_exported=bool(m.group(1)),
+            ))
+        return classes
+
+    def _extract_rust_exports(self, content: str) -> list[ExportInfo]:
+        clean = self._strip_comments(content)
+        exports = []
+        seen = set()
+        for m in re.finditer(r'pub(?:\s*\(\w+\))?\s+fn\s+(\w+)\s*[<\(]', clean):
+            name = m.group(1)
+            if name not in seen:
+                seen.add(name)
+                exports.append(ExportInfo(variable_name=name, is_function=True))
+        for m in re.finditer(r'pub(?:\(\w+\))?\s+(struct|enum|trait|type)\s+(\w+)', clean):
+            name = m.group(2)
+            if name not in seen:
+                seen.add(name)
+                exports.append(ExportInfo(variable_name=name, is_class=(m.group(1) != "type")))
+        return exports
+
+    def _extract_rust_calls(self, content: str) -> list[FunctionCall]:
+        clean = self._strip_comments(content)
+        _rust_builtins = {'if','else','while','for','loop','match','return','let',
+                          'fn','struct','enum','trait','impl','mod','use','pub','self',
+                          'super','crate','unsafe','async','await','move','ref','mut','in'}
+        return self._extract_generic_calls(clean, _rust_builtins)
+
+    # ── Ruby 提取 ─────────────────────────────
+
+    def _extract_ruby_imports(self, content: str) -> list[ImportInfo]:
+        clean = content  # Ruby uses # comments, not //
+        imports = []
+        for m in re.finditer(r'require(?:_relative)?\s+["\']([^"\']+)["\']', clean):
+            imports.append(ImportInfo(
+                variable_name=m.group(1), source_module=m.group(1), import_type="require",
+            ))
+        for m in re.finditer(r'(?:include|extend|prepend)\s+(\w+(?:\s*,\s*\w+)*)', clean):
+            for mod in m.group(1).split(","):
+                mod = mod.strip()
+                if mod:
+                    imports.append(ImportInfo(
+                        variable_name=mod, source_module=mod, import_type="mixin",
+                    ))
+        return imports
+
+    def _extract_ruby_functions(self, content: str) -> list[FunctionSignature]:
+        clean = content
+        funcs = []
+        for m in re.finditer(
+            r'def\s+(?:self\.)?(\w+[?!]?)(?:\(([^)]*)\))?',
+            clean,
+        ):
+            name = m.group(1)
+            pstr = m.group(2) or ""
+            params = []
+            for p in pstr.split(","):
+                p = p.strip()
+                if p:
+                    if ":" in p:
+                        pname, _, pdefault = p.partition(":")
+                        params.append({"name": pname.strip(), "type": "unknown"})
+                    elif "=" in p:
+                        pname, _, _ = p.partition("=")
+                        params.append({"name": pname.strip(), "type": "unknown"})
+                    else:
+                        params.append({"name": p, "type": "unknown"})
+            funcs.append(FunctionSignature(
+                name=name, params=params, return_type="unknown",
+                is_exported=not name.startswith("_"),
+            ))
+        return funcs
+
+    def _extract_ruby_classes(self, content: str) -> list[ClassDefinition]:
+        clean = content
+        classes = []
+        for m in re.finditer(r'(?:class|module)\s+(\w+(?:::)?\w*)', clean):
+            classes.append(ClassDefinition(
+                name=m.group(1), methods=[], is_exported=True,
+            ))
+        return classes
+
+    def _extract_ruby_exports(self, content: str) -> list[ExportInfo]:
+        clean = content
+        exports = []
+        seen = set()
+        for m in re.finditer(r'def\s+(?:self\.)?(\w+[?!]?)', clean):
+            name = m.group(1)
+            if name not in seen:
+                seen.add(name)
+                exports.append(ExportInfo(variable_name=name, is_function=True))
+        for m in re.finditer(r'(?:class|module)\s+(\w+)', clean):
+            name = m.group(1)
+            if name not in seen:
+                seen.add(name)
+                exports.append(ExportInfo(variable_name=name, is_class=True))
+        return exports
+
+    def _extract_ruby_calls(self, content: str) -> list[FunctionCall]:
+        _ruby_keywords = {'if','unless','while','until','for','case','when','begin',
+                          'end','def','class','module','do','return','break','next',
+                          'redo','retry','super','yield','raise','rescue','ensure','self'}
+        return self._extract_generic_calls(content, _ruby_keywords)
+
+    # ── Swift 提取 ────────────────────────────
+
+    def _extract_swift_imports(self, content: str) -> list[ImportInfo]:
+        clean = self._strip_comments(content)
+        imports = []
+        for m in re.finditer(r'import\s+(\w+)', clean):
+            imports.append(ImportInfo(
+                variable_name=m.group(1), source_module=m.group(1), import_type="named",
+            ))
+        return imports
+
+    def _extract_swift_functions(self, content: str) -> list[FunctionSignature]:
+        clean = self._strip_comments(content)
+        funcs = []
+        for m in re.finditer(
+            r'(?:public|open|private|internal|fileprivate)\s+'
+            r'(?:static\s+)?(?:override\s+)?(?:mutating\s+)?'
+            r'func\s+(\w+)\s*\(([^)]*)\)\s*(?:throws\s+)?(?:async\s+)?'
+            r'(?:->\s*(\S+))?',
+            clean,
+        ):
+            name, pstr, rtype = m.group(1), m.group(2), (m.group(3) or "Void").strip()
+            params = []
+            for p in pstr.split(","):
+                p = p.strip()
+                if not p or p == "_":
+                    continue
+                if ":" in p:
+                    # label pname: Type
+                    parts = p.split(":", 1)
+                    pname = parts[0].strip()
+                    ptype = parts[1].strip() if len(parts) > 1 else "unknown"
+                    params.append({"name": pname, "type": ptype})
+                else:
+                    params.append({"name": p, "type": "unknown"})
+            funcs.append(FunctionSignature(
+                name=name, params=params, return_type=rtype, is_exported=True,
+            ))
+        return funcs
+
+    def _extract_swift_classes(self, content: str) -> list[ClassDefinition]:
+        clean = self._strip_comments(content)
+        classes = []
+        # Classes with visibility modifiers
+        for m in re.finditer(
+            r'(?:public|open|private|internal|fileprivate)\s+'
+            r'(?:final\s+)?(class|struct|enum|protocol|extension)\s+(\w+)',
+            clean,
+        ):
+            classes.append(ClassDefinition(
+                name=m.group(2), methods=[], is_exported=True,
+            ))
+        # Classes without visibility modifiers (internal by default)
+        for m in re.finditer(
+            r'(?:final\s+)?(class|struct|enum|protocol|extension)\s+(\w+)',
+            clean,
+        ):
+            if not any(c.name == m.group(2) for c in classes):
+                classes.append(ClassDefinition(
+                    name=m.group(2), methods=[], is_exported=True,
+                ))
+        return classes
+
+    def _extract_swift_exports(self, content: str) -> list[ExportInfo]:
+        clean = self._strip_comments(content)
+        exports = []
+        seen = set()
+        for m in re.finditer(
+            r'(?:public|open)\s+(?:static\s+)?func\s+(\w+)\s*\(', clean):
+            name = m.group(1)
+            if name not in seen:
+                seen.add(name)
+                exports.append(ExportInfo(variable_name=name, is_function=True))
+        for m in re.finditer(
+            r'(?:public|open)\s+(?:final\s+)?(class|struct|enum|protocol)\s+(\w+)', clean):
+            name = m.group(2)
+            if name not in seen:
+                seen.add(name)
+                exports.append(ExportInfo(variable_name=name, is_class=True))
+        return exports
+
+    def _extract_swift_calls(self, content: str) -> list[FunctionCall]:
+        clean = self._strip_comments(content)
+        _swift_keywords = {'if','else','guard','while','for','switch','case','return',
+                           'throw','try','catch','import','class','struct','enum','protocol',
+                           'extension','func','let','var','defer','break','continue','where',
+                           'default','fallthrough','repeat','do','associatedtype','typealias'}
+        return self._extract_generic_calls(clean, _swift_keywords)
+
+    # ── TS/JS 调用提取 ────────────────────────
+
+    def _extract_ts_calls(self, content: str) -> list[FunctionCall]:
+        clean = self._strip_comments(content)
+        _ts_keywords = {'if','else','while','for','switch','case','return','throw',
+                        'new','try','catch','finally','import','export','typeof',
+                        'instanceof','delete','break','continue','function','class',
+                        'async','await','yield','default','from','of','in','void'}
+        return self._extract_generic_calls(clean, _ts_keywords)
+
+    # ── Vue/Svelte ────────────────────────────
+
+    def _extract_vue_svelte_script(self, content: str) -> str | None:
+        # Match <script ...>...</script> or <script setup ...>...</script>
+        m = re.search(r'<script[^>]*>([\s\S]*?)</script>', content)
+        return m.group(1) if m else None
+
+    # ── Bash 提取 ─────────────────────────────
+
+    def _extract_bash_imports(self, content: str) -> list[ImportInfo]:
+        imports = []
+        for m in re.finditer(r'(?:^|\n)\s*(?:source|\.)\s+([^\s;|&]+)', content):
+            imports.append(ImportInfo(
+                variable_name=m.group(1).strip(), source_module=m.group(1).strip(),
+                import_type="source",
+            ))
+        return imports
+
+    def _extract_bash_functions(self, content: str) -> list[FunctionSignature]:
+        funcs = []
+        # function name() { ... }  and  name() { ... }
+        for m in re.finditer(r'(?:function\s+)?(\w+)\s*\(\s*\)\s*\{', content):
+            name = m.group(1)
+            if name in {'if','then','else','elif','fi','for','while','until',
+                        'do','done','case','esac','select','in','function'}:
+                continue
+            funcs.append(FunctionSignature(
+                name=name, params=[], return_type="unknown", is_exported=True,
+            ))
+        return funcs
+
+    def _extract_bash_exports(self, content: str) -> list[ExportInfo]:
+        exports = []
+        for m in re.finditer(r'(?:function\s+)?(\w+)\s*\(\s*\)\s*\{', content):
+            name = m.group(1)
+            if name not in {'if','then','else','elif','fi','for','while',
+                            'until','do','done','case','esac','function'}:
+                exports.append(ExportInfo(variable_name=name, is_function=True))
+        return exports
+
+    # ── 通用辅助 ──────────────────────────────
+
+    def _strip_comments(self, content: str) -> str:
+        """Remove // line comments and /* */ block comments."""
+        content = re.sub(r'//[^\n]*', '', content)
+        content = re.sub(r'/\*[\s\S]*?\*/', '', content)
+        return content
+
+    def _extract_generic_calls(
+        self, content: str, keyword_set: set[str] | frozenset[str],
+    ) -> list[FunctionCall]:
+        """Extract function calls by regex, skipping known keywords.
+
+        Matches patterns like: foo(args), obj.foo(args), pkg::foo(args)
+        """
+        calls = []
+        for m in re.finditer(r'(\w+(?:\.\w+|::\w+)*)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)', content):
+            callee = m.group(1).strip()
+            if callee in keyword_set:
+                continue
+            args_str = m.group(2)
+            args = []
+            for i, arg in enumerate(args_str.split(",")):
+                arg = arg.strip()
+                if arg:
+                    args.append({"name": arg, "type": "unknown", "position": i})
+            calls.append(FunctionCall(
+                caller_name="", callee_name=callee, args=args, line=0,
+            ))
         return calls
 
     # ── 参数解析辅助 ──────────────────────────

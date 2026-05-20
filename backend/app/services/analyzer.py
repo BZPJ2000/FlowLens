@@ -1,14 +1,11 @@
-"""分析编排服务 — 串联解析、AI分析、图构建、报告生成、持久化"""
+"""分析编排服务 — 串联解析、规则分析、图构建、报告生成、持久化"""
 
-import asyncio
 import uuid
-from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.parser import SourceScanStats, parser as code_parser
-from app.core.ai_engine import ai_engine
 from app.core.graph_builder import graph_builder
 from app.core.report_generator import report_generator
 from app.db.repository import (
@@ -40,13 +37,22 @@ async def run_analysis(
         if progress_callback:
             await progress_callback(analysis_id, status, pct, msg, detail)
 
+    scan_detail = ""
+    parse_results = []
+    ai_results = []
+    graph = None
+    partial_failure = False
+    error_messages = []
+
+    # ── Step 1: 解析源码 (0–20%) ────────────
     try:
-        # ── Step 1: 解析源码 (0–20%) ────────────
         await update(AnalysisStatus.PARSING, 5, "正在扫描项目文件结构...")
 
         parse_results, scan_stats = code_parser.scan_project(source_dir)
+
         if not parse_results:
-            raise ValueError("未找到可解析的源码文件（支持的扩展名: .ts/.js/.py/.go/.rs/.java 等）")
+            await update(AnalysisStatus.FAILED, 0, "未找到可解析的源码文件")
+            return  # 没有源码文件，直接退出，不抛异常
 
         total_parsed = len(parse_results)
         truncated_count = max(0, total_parsed - settings.max_files)
@@ -61,84 +67,125 @@ async def run_analysis(
 
         await update(
             AnalysisStatus.PARSING, 20,
-            f"解析完成，AI 将分析 {analyzed_count} 个业务源码文件",
+            f"解析完成，将分析 {analyzed_count} 个业务源码文件",
             f"{scan_detail}；语言分布: {_count_languages(parse_results)}",
         )
+    except Exception as e:
+        error_messages.append(f"解析阶段失败: {e}")
+        partial_failure = True
+        # 解析失败但已有部分结果，继续后续流程
+        if not parse_results:
+            await update(AnalysisStatus.FAILED, 0, f"解析失败: {e}")
+            return
 
-        # ── Step 2: AI 分析 (20–75%) ────────────
-        await update(AnalysisStatus.ANALYZING, 22, "开始 AI 分析...", scan_detail)
+    # ── Step 2: 规则分析 (20–65%) ────────────
+    if parse_results:
+        await update(AnalysisStatus.ANALYZING, 22, "开始规则分析...", scan_detail)
 
-        file_data = []
-        for pr in parse_results:
-            try:
-                content = Path(source_dir).joinpath(
-                    pr.file_path
-                ).read_text(encoding="utf-8", errors="ignore")
-            except Exception:
-                content = ""
-            file_data.append((pr, content))
+        from app.core.rule_analyzer import rule_analyzer
 
-        # 进度回调适配
-        async def ai_progress(completed: int, total: int, file_path: str):
-            pct = 20 + int((completed / total) * 55)
-            await update(
-                AnalysisStatus.ANALYZING, pct,
-                f"AI 分析: {completed}/{total}",
-                f"{scan_detail}；当前文件: {file_path}",
+        total = len(parse_results)
+        ai_results = []
+        for i, pr in enumerate(parse_results):
+            ai_results.append(rule_analyzer.analyze(pr))
+            if (i + 1) % 10 == 0 or i == total - 1:
+                pct = 20 + int(((i + 1) / total) * 45)
+                await update(
+                    AnalysisStatus.ANALYZING, pct,
+                    f"规则分析: {i + 1}/{total}",
+                    f"{scan_detail}；当前文件: {pr.file_path}",
+                )
+
+        await update(
+            AnalysisStatus.ANALYZING, 65,
+            f"规则分析完成，共 {len(ai_results)} 个文件",
+        )
+
+    # ── Step 2.5: 持久化文件分析结果 (65–75%) ──
+    path_to_db_id: dict[str, str] = {}
+    if parse_results and ai_results:
+        try:
+            await update(AnalysisStatus.ANALYZING, 68, "持久化规则分析结果...")
+            # 确保两个列表长度一致
+            min_len = min(len(parse_results), len(ai_results))
+            path_to_db_id = await _persist_file_nodes(
+                db, analysis_id,
+                parse_results[:min_len], ai_results[:min_len],
+            )
+            await db.commit()
+        except Exception as e:
+            error_messages.append(f"持久化文件分析结果失败: {e}")
+            partial_failure = True
+            await db.rollback()
+
+    # ── Step 3: 构建关系图 (75–85%) ──────────
+    if parse_results and ai_results:
+        try:
+            await update(AnalysisStatus.BUILDING, 75, "构建数据流关系图...")
+            min_len = min(len(parse_results), len(ai_results))
+            graph = graph_builder.build(
+                parse_results[:min_len], ai_results[:min_len],
             )
 
-        ai_results = await ai_engine.analyze_batch(
-            file_data, progress_callback=ai_progress,
-        )
+            await update(
+                AnalysisStatus.BUILDING, 82,
+                f"关系图构建完成: {len(graph.nodes)} 节点, {len(graph.edges)} 边",
+            )
 
-        await update(
-            AnalysisStatus.ANALYZING, 75,
-            f"AI 分析完成，共 {len(ai_results)} 个文件",
-        )
+            # 持久化边
+            await update(AnalysisStatus.BUILDING, 84, "持久化数据流关系...")
+            await _persist_edges(db, analysis_id, graph, path_to_db_id)
+            await db.commit()
+        except Exception as e:
+            error_messages.append(f"关系图构建失败: {e}")
+            partial_failure = True
+            await db.rollback()
+            try:
+                # 尝试用空图继续
+                from app.models.schemas import DataFlowGraph
+                graph = DataFlowGraph()
+            except Exception:
+                pass
 
-        # ── Step 2.5: 持久化文件分析结果 (75–80%) ──
-        # 先落盘 AI 分析结果，防止后续步骤失败导致数据丢失
-        await update(AnalysisStatus.ANALYZING, 78, "持久化 AI 分析结果...")
-        path_to_db_id = await _persist_file_nodes(db, analysis_id, parse_results, ai_results)
+    # ── Step 4: 生成报告 (85–100%) ───────────
+    if graph and parse_results and ai_results:
+        try:
+            await update(AnalysisStatus.BUILDING, 86, "生成架构报告...")
+            min_len = min(len(parse_results), len(ai_results))
+            report = report_generator.generate(
+                project_name,
+                parse_results[:min_len], ai_results[:min_len], graph,
+            )
+            markdown = report_generator.generate_markdown(report)
 
-        # ── Step 3: 构建关系图 (80–88%) ──────────
-        await update(AnalysisStatus.BUILDING, 80, "构建数据流关系图...")
+            await ReportRepo.save(
+                db, str(analysis_id), markdown,
+                report.architecture_summary,
+                len(report.issues),
+            )
+            await db.commit()
 
-        graph = graph_builder.build(parse_results, ai_results)
-
-        await update(
-            AnalysisStatus.BUILDING, 85,
-            f"关系图构建完成: {len(graph.nodes)} 节点, {len(graph.edges)} 边",
-        )
-
-        # 持久化边
-        await update(AnalysisStatus.BUILDING, 87, "持久化数据流关系...")
-        await _persist_edges(db, analysis_id, graph, path_to_db_id)
-
-        # ── Step 4: 生成报告 (88–100%) ───────────
-        await update(AnalysisStatus.BUILDING, 90, "生成架构报告...")
-
-        report = report_generator.generate(
-            project_name, parse_results, ai_results, graph,
-        )
-        markdown = report_generator.generate_markdown(report)
-
-        await ReportRepo.save(
-            db, str(analysis_id), markdown,
-            report.architecture_summary,
-            len(report.issues),
-        )
-
-        await update(
-            AnalysisStatus.COMPLETED, 100,
-            f"分析完成 — {len(graph.nodes)} 节点, {len(graph.edges)} 数据流, "
-            f"{len(report.issues)} 个问题, 健康评分 {report.health_score}/100",
-        )
-
-    except Exception as e:
-        await db.rollback()
-        await update(AnalysisStatus.FAILED, 0, str(e))
-        raise
+            status_msg = "分析完成"
+            if partial_failure:
+                status_msg = f"分析部分完成（{len(error_messages)} 个步骤失败）"
+            await update(
+                AnalysisStatus.COMPLETED, 100,
+                f"{status_msg} — {len(graph.nodes)} 节点, {len(graph.edges)} 数据流, "
+                f"{len(report.issues)} 个问题, 健康评分 {report.health_score}/100",
+            )
+        except Exception as e:
+            error_messages.append(f"报告生成失败: {e}")
+            await db.rollback()
+            await update(
+                AnalysisStatus.COMPLETED, 95,
+                f"分析完成（报告生成失败）— {len(graph.nodes)} 节点, {len(graph.edges)} 数据流",
+            )
+    elif parse_results:
+        # 即使没有图也能完成（至少解析完成了）
+        final_msg = "分析完成（仅解析，无关系图）"
+        if error_messages:
+            final_msg += f"；错误: {'; '.join(error_messages[-2:])}"
+        await update(AnalysisStatus.COMPLETED, 50, final_msg)
 
 
 # ── 持久化辅助 ──────────────────────────────────
@@ -222,7 +269,7 @@ def _format_scan_progress_detail(
     truncated_files: int,
 ) -> str:
     limit_text = (
-        f"AI 队列上限 {settings.max_files}，已截断 {truncated_files} 个"
+        f"分析队列上限 {settings.max_files}，已截断 {truncated_files} 个"
         if truncated_files
         else f"未触发 {settings.max_files} 上限"
     )
@@ -232,7 +279,7 @@ def _format_scan_progress_detail(
         f"候选代码 {scan_stats.supported_extension_files} 个；"
         f"过滤配置/测试/构建/生成文件 {scan_stats.ignored_files} 个；"
         f"业务源码 {total_source_files} 个；"
-        f"本次 AI 分析 {analyzed_files} 个；"
+        f"本次分析 {analyzed_files} 个；"
         f"{limit_text}"
     )
 

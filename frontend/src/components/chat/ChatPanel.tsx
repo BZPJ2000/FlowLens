@@ -1,11 +1,24 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { X, Send, Loader2, MessageSquare } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import { useGraphStore } from "../../stores/graphStore";
 import { api } from "../../api/client";
+import { CodeBlock } from "../ai/CodeBlock";
+import { ReasoningBlock } from "../ai/ReasoningBlock";
+import { highlightCode } from "../../services/highlight-service";
+import { normalizeThinkingSignatureError } from "../../services/thinking-error-handler";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
+  reasoning?: string;
+  error?: string;
+}
+
+/** CodeBlock 的高亮函数适配器 */
+async function highlightAdapter(code: string, lang: string, _theme: string): Promise<string> {
+  const result = await highlightCode({ code, language: lang, theme: "github-dark" });
+  return result.html;
 }
 
 export default function ChatPanel() {
@@ -17,32 +30,82 @@ export default function ChatPanel() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [streaming, setStreaming] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const handleSend = async () => {
+  const handleSend = useCallback(async () => {
     if (!input.trim() || !analysisId || loading) return;
     const msg = input.trim();
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: msg }]);
     setLoading(true);
+    setStreaming(true);
+
+    // Add empty assistant message that will be filled by streaming
+    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+    const abort = new AbortController();
+    abortRef.current = abort;
 
     try {
-      const res = await api.sendMessage(analysisId, msg, sessionId || undefined);
-      setSessionId(res.session_id);
-      setMessages((prev) => [...prev, { role: "assistant", content: res.reply }]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: "AI 服务暂时不可用，请检查配置。" },
-      ]);
-    } finally {
+      await api.sendMessageStream(
+        analysisId,
+        msg,
+        sessionId,
+        // onChunk
+        (delta) => {
+          setMessages((prev) => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last && last.role === "assistant") {
+              updated[updated.length - 1] = { ...last, content: last.content + delta };
+            }
+            return updated;
+          });
+        },
+        // onDone
+        () => {
+          setStreaming(false);
+          setLoading(false);
+        },
+        // onError
+        (error) => {
+          const normalized = normalizeThinkingSignatureError(error);
+          setMessages((prev) => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last && last.role === "assistant") {
+              updated[updated.length - 1] = { ...last, content: normalized, error: normalized };
+            }
+            return updated;
+          });
+          setStreaming(false);
+          setLoading(false);
+        },
+        abort.signal,
+      );
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "未知错误";
+      const normalized = normalizeThinkingSignatureError(errMsg);
+      setMessages((prev) => {
+        const updated = [...prev];
+        const last = updated[updated.length - 1];
+        if (last && last.role === "assistant") {
+          updated[updated.length - 1] = { ...last, content: normalized, error: normalized };
+        }
+        return updated;
+      });
+      setStreaming(false);
       setLoading(false);
+    } finally {
+      abortRef.current = null;
     }
-  };
+  }, [input, analysisId, loading, sessionId]);
 
   if (!showChatPanel) return null;
 
@@ -77,13 +140,54 @@ export default function ChatPanel() {
             className={`text-xs leading-relaxed ${
               m.role === "user"
                 ? "bg-[#7c3aed]/10 border border-[#7c3aed]/20 rounded-xl px-3 py-2 ml-6 text-[#f5f5f7]"
-                : "bg-[#12121c] border border-[#1e1e3a] rounded-xl px-3 py-2 mr-4 text-[#a1a1aa]"
+                : m.error
+                  ? "bg-[#ef4444]/5 border border-[#ef4444]/20 rounded-xl px-3 py-2 mr-4 text-[#fca5a5]"
+                  : "bg-[#12121c] border border-[#1e1e3a] rounded-xl px-3 py-2 mr-4 text-[#a1a1aa]"
             }`}
           >
-            {m.content}
+            {/* Reasoning block */}
+            {m.reasoning && (
+              <ReasoningBlock content={m.reasoning} title="思考过程" />
+            )}
+            {/* Markdown content with code highlighting */}
+            <div className="chat-message-content prose-xs prose-invert max-w-none">
+              <ReactMarkdown
+                components={{
+                  code({ className, children, ...props }) {
+                    const match = /language-(\w+)/.exec(className || "");
+                    const codeStr = String(children).replace(/\n$/, "");
+                    // Inline code (no language class)
+                    if (!match) {
+                      return (
+                        <code
+                          className="bg-[#1a1a2e] text-[#e879f9] px-1 py-0.5 rounded text-[11px] font-mono"
+                          {...props}
+                        >
+                          {children}
+                        </code>
+                      );
+                    }
+                    // Code block with language
+                    return (
+                      <CodeBlock
+                        code={codeStr}
+                        language={match[1]}
+                        highlightFn={highlightAdapter}
+                      />
+                    );
+                  },
+                  pre({ children }) {
+                    // react-markdown wraps code blocks in <pre>, pass through
+                    return <>{children}</>;
+                  },
+                }}
+              >
+                {m.content}
+              </ReactMarkdown>
+            </div>
           </div>
         ))}
-        {loading && (
+        {loading && !streaming && (
           <div className="flex items-center gap-2 text-[#6b7280] text-xs px-2">
             <Loader2 className="w-3 h-3 animate-spin" />
             AI 正在思考...

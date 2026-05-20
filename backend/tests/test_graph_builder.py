@@ -375,3 +375,135 @@ class TestPortToParamEdges:
         assert {e.variable_name for e in call_edges} == {"email", "subject"}
         assert all(e.source_node_id == e.target_node_id for e in call_edges)
         assert all(e.source_function_id and e.target_function_id for e in call_edges)
+
+
+class TestCrossFileCallEdges:
+    """Test cross-file function call edges — when B calls a function imported from A."""
+
+    def test_cross_file_call_creates_edges_per_argument(self):
+        """File B imports 'validate' from A and calls it with 2 args → 2 cross-file CALL edges."""
+        builder = GraphBuilder()
+
+        parse_a = _make_parse(
+            "validators.py", "validators.py",
+            functions=[FunctionSignature(
+                name="validate",
+                params=[{"name": "email", "type": "str"}, {"name": "subject", "type": "str"}],
+                return_type="bool",
+                is_exported=True,
+            )],
+            exports=[ExportInfo(variable_name="validate", is_function=True, data_type="function")],
+        )
+        parse_b = _make_parse(
+            "main.py", "main.py",
+            functions=[FunctionSignature(
+                name="run",
+                params=[],
+                return_type="None",
+            )],
+            imports=[ImportInfo(variable_name="validate", source_module="validators", data_type="function")],
+            calls=[FunctionCall(
+                caller_name="run",
+                callee_name="validate",
+                args=[
+                    {"name": "user_email", "type": "str", "position": 0},
+                    {"name": "msg_subject", "type": "str", "position": 1},
+                ],
+            )],
+        )
+
+        graph = builder.build([parse_a, parse_b], [])
+
+        # Cross-file CALL edges: source_node != target_node
+        cross_call_edges = [
+            e for e in graph.edges
+            if e.edge_type == "call" and e.source_node_id != e.target_node_id
+        ]
+        assert len(cross_call_edges) == 2, f"Expected 2 cross-file call edges, got {len(cross_call_edges)}"
+        # Variable names should be target param names (email, subject)
+        assert {e.variable_name for e in cross_call_edges} == {"email", "subject"}
+        # All edges should have source and target function IDs
+        assert all(e.source_function_id for e in cross_call_edges)
+        assert all(e.target_function_id for e in cross_call_edges)
+
+    def test_cross_file_call_class_method_to_imported_function(self):
+        """Class method in B calls imported function from A."""
+        builder = GraphBuilder()
+
+        parse_a = _make_parse(
+            "utils.py", "utils.py",
+            functions=[FunctionSignature(
+                name="format_data",
+                params=[{"name": "raw", "type": "dict"}],
+                return_type="str",
+                is_exported=True,
+            )],
+            exports=[ExportInfo(variable_name="format_data", is_function=True, data_type="function")],
+        )
+        parse_b = _make_parse(
+            "service.py", "service.py",
+            classes=[ClassDefinition(
+                name="DataService",
+                methods=[FunctionSignature(
+                    name="process",
+                    params=[{"name": "self", "type": ""}, {"name": "input", "type": "dict"}],
+                    return_type="str",
+                )],
+            )],
+            imports=[ImportInfo(variable_name="format_data", source_module="utils", data_type="function")],
+            calls=[FunctionCall(
+                caller_name="process",
+                callee_name="format_data",
+                args=[{"name": "input", "type": "dict", "position": 0}],
+            )],
+        )
+
+        graph = builder.build([parse_a, parse_b], [])
+
+        cross_call_edges = [
+            e for e in graph.edges
+            if e.edge_type == "call" and e.source_node_id != e.target_node_id
+        ]
+        assert len(cross_call_edges) == 1
+        edge = cross_call_edges[0]
+        assert edge.variable_name == "raw"  # target param name
+        assert edge.source_function_id  # method ID of process
+
+    def test_cross_file_call_aliased_import(self):
+        """Import with alias: 'from utils import format_data as fmt' then call fmt(x)."""
+        builder = GraphBuilder()
+
+        parse_a = _make_parse(
+            "utils.py", "utils.py",
+            functions=[FunctionSignature(
+                name="format_data",
+                params=[{"name": "raw", "type": "dict"}],
+                return_type="str",
+                is_exported=True,
+            )],
+            exports=[ExportInfo(variable_name="format_data", is_function=True, data_type="function")],
+        )
+        parse_b = _make_parse(
+            "main.py", "main.py",
+            functions=[FunctionSignature(name="run", params=[], return_type="None")],
+            imports=[ImportInfo(
+                variable_name="fmt",
+                alias="format_data",
+                source_module="utils",
+                data_type="function",
+            )],
+            calls=[FunctionCall(
+                caller_name="run",
+                callee_name="fmt",
+                args=[{"name": "payload", "type": "dict", "position": 0}],
+            )],
+        )
+
+        graph = builder.build([parse_a, parse_b], [])
+
+        cross_call_edges = [
+            e for e in graph.edges
+            if e.edge_type == "call" and e.source_node_id != e.target_node_id
+        ]
+        assert len(cross_call_edges) == 1
+        assert cross_call_edges[0].variable_name == "raw"  # target param name

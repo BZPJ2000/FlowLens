@@ -177,6 +177,7 @@ async def _run_import_and_analyze(
     source_url: str,
     file_bytes: bytes | None,
     file_name: str | None,
+    reuse_storage_path: str = "",  # 重新分析时复用已有路径
 ):
     """导入 + 分析完整流程（独立 DB session）"""
     from app.db.database import async_session
@@ -185,30 +186,40 @@ async def _run_import_and_analyze(
 
     analysis_id = uuid.UUID(analysis_id_str)
     tmpdir = ""
+    is_reuse = bool(reuse_storage_path)
     try:
-        # Step 1: 导入
-        progress_manager.update(
-            analysis_id, Step.CLONING, 2,
-            "正在获取项目源码...",
-        )
+        if is_reuse:
+            # 重新分析：跳过导入，直接使用已有源码
+            tmpdir = reuse_storage_path
+            progress_manager.update(
+                analysis_id, Step.EXTRACTING, 5,
+                f"项目已就绪（复用已有源码）: {project_name}",
+                tmpdir,
+            )
+        else:
+            # Step 1: 导入
+            progress_manager.update(
+                analysis_id, Step.CLONING, 2,
+                "正在获取项目源码...",
+            )
 
-        if source_type == "github" and source_url:
-            tmpdir = await import_service.import_from_github(source_url)
-        elif file_bytes and file_name:
-            upload_dir = Path(settings.upload_dir)
-            upload_dir.mkdir(exist_ok=True)
-            tmp_path = upload_dir / f"{analysis_id}.zip"
-            tmp_path.write_bytes(file_bytes)
-            tmpdir = await import_service.import_from_upload(str(tmp_path))
+            if source_type == "github" and source_url:
+                tmpdir = await import_service.import_from_github(source_url)
+            elif file_bytes and file_name:
+                upload_dir = Path(settings.upload_dir)
+                upload_dir.mkdir(exist_ok=True)
+                tmp_path = upload_dir / f"{analysis_id}.zip"
+                tmp_path.write_bytes(file_bytes)
+                tmpdir = await import_service.import_from_upload(str(tmp_path))
 
-        if not tmpdir:
-            raise RuntimeError("无法获取项目源码")
+            if not tmpdir:
+                raise RuntimeError("无法获取项目源码")
 
-        progress_manager.update(
-            analysis_id, Step.EXTRACTING, 5,
-            f"项目已导入: {project_name}",
-            tmpdir,
-        )
+            progress_manager.update(
+                analysis_id, Step.EXTRACTING, 5,
+                f"项目已导入: {project_name}",
+                tmpdir,
+            )
 
         # Step 2: 分析（带进度回调 + 独立 DB session）
         async def on_progress(aid, status, pct, msg, detail=""):
@@ -246,7 +257,8 @@ async def _run_import_and_analyze(
         except Exception:
             pass  # DB 更新失败不掩盖原始错误
     finally:
-        if tmpdir:
+        # 仅清理临时导入的目录，复用目录不删除
+        if tmpdir and not is_reuse:
             import_service.cleanup(tmpdir)
 
 
@@ -294,6 +306,53 @@ async def stream_progress(analysis_id: uuid.UUID):
             progress_manager.unsubscribe(analysis_id, q)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# ═══════════════════════════════════════════
+# Re-Analysis
+# ═══════════════════════════════════════════
+
+@router.post("/analyses/{analysis_id}/reanalyze")
+async def reanalyze_project(analysis_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """触发重新分析 — 基于已有项目创建新分析，支持增量重新识别"""
+    aid = str(analysis_id)
+    a = await AnalysisRepo.get(db, aid)
+    if not a:
+        raise HTTPException(404, "分析不存在")
+
+    # 获取关联的 project
+    project = await ProjectRepo.get(db, a.project_id)
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    # 检查项目存储路径是否存在
+    from pathlib import Path
+    storage_path = project.storage_path
+    if not storage_path or not Path(storage_path).exists():
+        raise HTTPException(400, "项目源码已过期，请重新导入")
+
+    # 创建新的 analysis 记录
+    new_analysis = await AnalysisRepo.create(db, project.id)
+    new_aid = str(new_analysis.id)
+    await db.commit()
+
+    # 后台启动重新分析（复用已有源码路径）
+    import asyncio
+    asyncio.create_task(
+        _run_import_and_analyze(
+            new_aid, project.name,
+            project.source_type, project.source_url or "",
+            None, None,
+            reuse_storage_path=storage_path,
+        )
+    )
+
+    return {
+        "analysis_id": new_aid,
+        "project_id": str(project.id),
+        "status": "pending",
+        "message": "已创建重新分析任务",
+    }
 
 
 # ═══════════════════════════════════════════
@@ -611,3 +670,76 @@ async def chat(
         "reply": reply,
         "referenced": [],
     }
+
+
+@router.post("/analyses/{analysis_id}/chat/stream")
+async def chat_stream(
+    analysis_id: uuid.UUID,
+    req: ChatRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """流式智能问答 — SSE streaming 响应"""
+    session_id = uuid.UUID(req.session_id) if req.session_id else None
+    session = await ChatRepo.get_or_create_session(db, analysis_id, session_id)
+
+    # 保存用户消息
+    await ChatRepo.add_message(db, session.id, "user", req.message)
+
+    # 获取分析数据 + RAG 上下文
+    aid = str(analysis_id)
+    nodes_raw = await FileNodeRepo.get_by_analysis(db, aid)
+    edges_raw = await DataEdgeRepo.get_by_analysis(db, aid)
+
+    nodes_data = [
+        {
+            "id": str(n.id), "file_path": n.file_path,
+            "file_name": n.file_name, "summary": n.summary or "",
+            "detail": n.detail_explain or "", "architecture_role": "",
+            "imports_json": n.imports_json or [], "exports_json": n.exports_json or [],
+        }
+        for n in nodes_raw
+    ]
+    edges_data = [
+        {
+            "source_node_id": str(e.from_file_id),
+            "target_node_id": str(e.to_file_id),
+            "variable_name": e.variable_name, "data_type": e.data_type,
+        }
+        for e in edges_raw
+    ]
+
+    context = rag_service.build_context(req.message, nodes_data, edges_data)
+    history = await ChatRepo.get_messages(db, session.id)
+    chat_history = [{"role": h.role, "content": h.content} for h in history[-10:]]
+    await db.commit()
+
+    from app.core.ai_engine import ai_engine
+
+    async def generate():
+        full_reply = ""
+        try:
+            async for sse_data in ai_engine.stream_chat(req.message, context, chat_history):
+                # Accumulate full reply for saving
+                for line in sse_data.strip().split("\n"):
+                    if line.startswith("data: "):
+                        try:
+                            evt = json.loads(line[6:])
+                            if evt.get("type") == "chunk":
+                                full_reply += evt.get("delta", "")
+                        except (json.JSONDecodeError, KeyError):
+                            pass
+                yield sse_data
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+        # 保存助手回复
+        if full_reply:
+            try:
+                from app.db.database import async_session
+                async with async_session() as save_db:
+                    await ChatRepo.add_message(save_db, session.id, "assistant", full_reply)
+                    await save_db.commit()
+            except Exception:
+                pass
+
+    return StreamingResponse(generate(), media_type="text/event-stream")

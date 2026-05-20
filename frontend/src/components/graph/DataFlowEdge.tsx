@@ -54,6 +54,7 @@ const DataFlowEdge = memo((props: EdgeProps) => {
     variable_name?: string;
     data_type?: string;
     label?: string;
+    edge_type?: string;
     animating?: boolean;
     isDimmed?: boolean;
     isPathHighlighted?: boolean;
@@ -94,9 +95,23 @@ const DataFlowEdge = memo((props: EdgeProps) => {
   }
 
   const tc = getTypeColor(d.data_type || "unknown");
-  const edgeColor = d.isPathHighlighted ? "#a78bfa" : tc.dot;
-  const flowColor = d.isPathHighlighted ? "#c4b5fd" : tc.text;
-  const strokeWidth = selected ? 5 : 3.5;
+  const isCallEdge = d.edge_type === "call";
+  const isInternalEdge = d.edge_type === "port_to_function" || d.edge_type === "function_to_port";
+  const edgeColor = d.isPathHighlighted
+    ? "#a78bfa"
+    : isCallEdge
+      ? "#f59e0b"
+      : isInternalEdge
+        ? "#4b5563"
+        : tc.dot;
+  const flowColor = d.isPathHighlighted
+    ? "#c4b5fd"
+    : isCallEdge
+      ? "#fbbf24"
+      : isInternalEdge
+        ? "#6b7280"
+        : tc.text;
+  const strokeWidth = isInternalEdge ? 2 : selected ? 5 : 3.5;
 
   const [edgePath, labelX, labelY] = routed || getSmoothStepPath({
     sourceX: sourceX + offsetX, sourceY: sourceY + offsetY, sourcePosition: srcSide,
@@ -121,7 +136,8 @@ const DataFlowEdge = memo((props: EdgeProps) => {
         style={{
           strokeWidth,
           stroke: edgeColor,
-          opacity: d.isPathHighlighted ? 0.8 : 0.7,
+          opacity: d.isPathHighlighted ? 0.8 : isInternalEdge ? 0.4 : 0.7,
+          strokeDasharray: isCallEdge ? "6 4" : undefined,
           transition: "stroke 0.3s",
         }}
         id={id}

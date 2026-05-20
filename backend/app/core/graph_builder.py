@@ -197,6 +197,8 @@ class GraphBuilder:
         edges.extend(param_edges)
         call_edges = self._build_internal_call_edges(nodes, parse_results)
         edges.extend(call_edges)
+        cross_call_edges = self._build_cross_file_call_edges(nodes, parse_results, node_by_path, node_by_file)
+        edges.extend(cross_call_edges)
         edges = self._dedupe_edges(edges)
 
         # Step 3: 识别入口/出口
@@ -600,6 +602,119 @@ class GraphBuilder:
                         data_type=str(arg.get("type", "unknown") or "unknown"),
                         edge_type=EdgeType.CALL,
                         label=f"{arg_name} → {call.callee_name}({variable_name})",
+                    ))
+
+        return edges
+
+    def _build_cross_file_call_edges(
+        self,
+        nodes: list[GraphNode],
+        parse_results: list[ParseResult],
+        node_by_path: dict[str, GraphNode],
+        node_by_file: dict[str, GraphNode],
+    ) -> list[GraphEdge]:
+        """跨文件函数调用边 — 当 B 调用从 A 导入的函数时，为每个参数创建 CALL 边。"""
+        import uuid as _uuid
+
+        edges: list[GraphEdge] = []
+        node_by_path_local = {n.file_path: n for n in nodes}
+
+        # 建立每个文件的 {导入变量名 → (源文件路径, 源函数原名)} 映射
+        import_source_map: dict[str, dict[str, tuple[str, str]]] = {}
+        for parse in parse_results:
+            file_imports: dict[str, tuple[str, str]] = {}
+            for imp in parse.imports:
+                var_name = imp.variable_name
+                if not var_name or not imp.source_module:
+                    continue
+                # 尝试匹配源文件
+                for other_parse in parse_results:
+                    if other_parse.file_path == parse.file_path:
+                        continue
+                    if module_matches_path(imp.source_module, parse.file_path, other_parse.file_path):
+                        # 确认源文件确实导出了这个名字（或别名匹配）
+                        exported_names = {e.variable_name for e in other_parse.exports}
+                        fn_names = {f.name for f in other_parse.functions}
+                        # 检查导入名或别名是否匹配源文件的导出/函数
+                        original_name = imp.alias or var_name
+                        if original_name in exported_names or original_name in fn_names:
+                            file_imports[var_name] = (other_parse.file_path, original_name)
+                            break
+                        elif var_name in exported_names or var_name in fn_names:
+                            file_imports[var_name] = (other_parse.file_path, var_name)
+                            break
+            import_source_map[parse.file_path] = file_imports
+
+        # 建立每个文件的 {函数名 → function_id} 映射
+        fn_ids_by_path: dict[str, dict[str, str]] = {}
+        fn_params_by_path: dict[str, dict[str, list]] = {}
+        for node in nodes:
+            ids = {fn.name: fn.id for fn in node.functions}
+            params = {fn.name: fn.params or [] for fn in node.functions}
+            fn_ids_by_path[node.file_path] = ids
+            fn_params_by_path[node.file_path] = params
+        # 也索引类方法
+        for parse in parse_results:
+            ids = fn_ids_by_path.setdefault(parse.file_path, {})
+            params = fn_params_by_path.setdefault(parse.file_path, {})
+            for cls in parse.classes or []:
+                for method in cls.methods or []:
+                    method_id = make_method_id(parse.file_path, cls.name, method.name)
+                    ids[method.name] = method_id
+                    params[method.name] = method.params or []
+
+        # 遍历每个文件的 calls，找跨文件调用
+        for parse in parse_results:
+            caller_node = node_by_path_local.get(parse.file_path)
+            if not caller_node:
+                continue
+            file_imports = import_source_map.get(parse.file_path, {})
+            caller_fn_ids = fn_ids_by_path.get(parse.file_path, {})
+
+            for call in parse.calls or []:
+                callee_name = call.callee_name
+                # 检查 callee 是否是从其他文件导入的
+                import_info = file_imports.get(callee_name)
+                if not import_info:
+                    continue
+                source_file, original_fn_name = import_info
+
+                target_node = node_by_path_local.get(source_file)
+                if not target_node or target_node.id == caller_node.id:
+                    continue
+
+                source_fn_id = caller_fn_ids.get(call.caller_name, "")
+                # callee 在源文件中的函数 ID（使用原始名称）
+                target_fn_ids = fn_ids_by_path.get(source_file, {})
+                target_fn_id = target_fn_ids.get(original_fn_name, "")
+                target_params = fn_params_by_path.get(source_file, {}).get(original_fn_name, [])
+
+                if not source_fn_id:
+                    continue
+
+                # 为每个参数创建一条边
+                for idx, arg in enumerate(call.args or []):
+                    arg_name = str(arg.get("name", ""))
+                    if not arg_name:
+                        continue
+                    # 匹配目标函数的参数名
+                    target_param_name = ""
+                    if idx < len(target_params):
+                        target_param_name = _param_name(target_params[idx])
+                    variable_name = target_param_name or arg_name
+
+                    edges.append(GraphEdge(
+                        id=str(_uuid.uuid4()),
+                        source_node_id=caller_node.id,
+                        target_node_id=target_node.id,
+                        source_port_id="",
+                        target_port_id="",
+                        source_function_id=source_fn_id,
+                        target_function_id=target_fn_id,
+                        variable_name=variable_name,
+                        data_type=str(arg.get("type", "unknown") or "unknown"),
+                        edge_type=EdgeType.CALL,
+                        label=f"{call.caller_name}() → {callee_name}({variable_name})",
                     ))
 
         return edges

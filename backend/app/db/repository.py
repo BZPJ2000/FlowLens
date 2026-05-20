@@ -1,5 +1,6 @@
 """Phase 2: Repository 层 — 数据访问封装，与业务逻辑解耦"""
 
+from uuid import UUID
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -128,8 +129,8 @@ class DataEdgeRepo:
 
 class ChatRepo:
     @staticmethod
-    async def create_session(db: AsyncSession, analysis_id: str, title: str = "新对话") -> ChatSession:
-        s = ChatSession(analysis_id=analysis_id, title=title)
+    async def create_session(db: AsyncSession, analysis_id: str | UUID, title: str = "新对话") -> ChatSession:
+        s = ChatSession(analysis_id=str(analysis_id), title=title)
         db.add(s)
         await db.flush()
         return s
@@ -154,6 +155,15 @@ class ChatRepo:
         db.add(msg)
         await db.flush()
         return msg
+
+    @staticmethod
+    async def list_sessions(db: AsyncSession, analysis_id: str) -> list[ChatSession]:
+        result = await db.execute(
+            select(ChatSession)
+            .where(ChatSession.analysis_id == analysis_id)
+            .order_by(ChatSession.created_at.desc())
+        )
+        return list(result.scalars().all())
 
     @staticmethod
     async def get_messages(db: AsyncSession, session_id: str) -> list[ChatMessage]:

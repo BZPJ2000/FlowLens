@@ -579,6 +579,47 @@ async def get_file_detail(
 
 
 # ═══════════════════════════════════════════
+# Chat Sessions
+# ═══════════════════════════════════════════
+
+@router.get("/analyses/{analysis_id}/chat/sessions")
+async def list_chat_sessions(analysis_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """列出某个分析下的所有对话会话"""
+    aid = str(analysis_id)
+    a = await AnalysisRepo.get(db, aid)
+    if not a:
+        raise HTTPException(404, "分析不存在")
+    sessions = await ChatRepo.list_sessions(db, aid)
+    return [
+        {
+            "session_id": str(s.id),
+            "title": s.title or "新对话",
+            "created_at": s.created_at.isoformat() if s.created_at else "",
+        }
+        for s in sessions
+    ]
+
+
+@router.get("/analyses/{analysis_id}/chat/{session_id}")
+async def get_chat_history(
+    analysis_id: uuid.UUID, session_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+):
+    """获取某个对话会话的完整消息历史"""
+    sid = str(session_id)
+    messages = await ChatRepo.get_messages(db, sid)
+    return [
+        {
+            "id": str(m.id),
+            "role": m.role,
+            "content": m.content,
+            "referenced_nodes": m.referenced_nodes or [],
+            "created_at": m.created_at.isoformat() if m.created_at else "",
+        }
+        for m in messages
+    ]
+
+
+# ═══════════════════════════════════════════
 # Report
 # ═══════════════════════════════════════════
 

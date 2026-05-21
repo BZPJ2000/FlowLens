@@ -41,6 +41,7 @@ from app.services.progress_manager import progress_manager, Step
 from app.core.graph_builder import graph_builder, analyze_impact
 from app.core.graphml_exporter import export_graphml
 from app.core.html_exporter import export_html
+from app.core.cfg_generator import generate_cfg
 
 router = APIRouter(prefix="/api/v1")
 
@@ -984,4 +985,30 @@ async def get_change_impact(
         "affected_count": len(impact),
         "affected_files": impact,
     }
+
+
+# ═══════════════════════════════════════════
+# Control Flow Graph (CFG) Generation
+# ═══════════════════════════════════════════
+
+@router.post("/cfg/generate")
+async def generate_control_flow_graph(
+    source_code: str,
+    function_name: str,
+    language: str,
+):
+    """生成函数内部控制流图（DOT 格式）
+
+    支持 Python 和 TypeScript/JavaScript。
+    返回 DOT 格式，可用 Graphviz 渲染为 SVG/PNG。
+    """
+    dot_content = generate_cfg(source_code, function_name, language)
+
+    from fastapi.responses import Response
+    return Response(
+        content=dot_content,
+        media_type="text/plain",
+        headers={"Content-Disposition": f"attachment; filename={function_name}_cfg.dot"},
+    )
+
 

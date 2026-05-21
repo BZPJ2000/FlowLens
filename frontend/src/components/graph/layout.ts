@@ -1,6 +1,7 @@
 import { Position, type Node, type Edge } from "@xyflow/react";
 import type { GraphNode as GNode, GraphEdge as GEdge } from "../../types";
 import { getBestConnectionSide } from "./portLayout";
+import { hierarchicalLayout } from "./hierarchicalLayout";
 
 // ── Sizing Constants ─────────────────────────
 const FILE_HEADER_H = 36;
@@ -306,52 +307,36 @@ export function computeLayout(
   // Sort cards by topological order
   cards.sort((a, b) => (order.get(a.nodeId) ?? 999) - (order.get(b.nodeId) ?? 999));
 
-  // ── Flex-wrap rows ────────────────────────
-  const canvasW = CANVAS_MAX_W - CANVAS_PADDING * 2;
-  const rows: CardBox[][] = [];
-  let curRow: CardBox[] = [];
-  let curRowW = 0;
+  // ── Use Hierarchical Layout ────────────────────────
+  // 使用层次化布局算法计算节点位置
+  const hierarchicalPositions = hierarchicalLayout(
+    graphNodes,
+    graphEdges,
+    entryPoints,
+    'horizontal' // 水平布局：从左到右
+  );
 
+  // 应用层次化布局的位置到 cards
   for (const card of cards) {
-    const w = card.naturalW;
-    if (curRow.length > 0 && curRowW + w + CARD_GAP > canvasW) {
-      rows.push(curRow);
-      curRow = [card];
-      curRowW = w;
+    const pos = hierarchicalPositions.get(card.nodeId);
+    if (pos) {
+      card.placedX = pos.x;
+      card.placedY = pos.y;
+      card.placedW = card.naturalW;
+      card.placedH = card.naturalH;
     } else {
-      curRow.push(card);
-      curRowW += w + (curRow.length > 1 ? CARD_GAP : 0);
+      // 如果没有计算出位置，使用默认位置
+      card.placedX = CANVAS_PADDING;
+      card.placedY = CANVAS_PADDING;
+      card.placedW = card.naturalW;
+      card.placedH = card.naturalH;
     }
   }
-  if (curRow.length > 0) rows.push(curRow);
 
-  // ── Position cards in rows ────────────────
+  // ── Create ReactFlow nodes ────────────────
   const fileNodes: LayoutNode[] = [];
   const fnNodes: LayoutNode[] = [];
   const fnPosMap = new Map<string, { x: number; y: number; parentId: string }>();
-  let rowY = CANVAS_PADDING;
-
-  for (const row of rows) {
-    // Row height = max natural height in row
-    const rowH = Math.max(...row.map((c) => c.naturalH));
-
-    // Total width of all cards in this row
-    const totalCardW = row.reduce((s, c) => s + c.naturalW, 0);
-    // Extra horizontal space to distribute
-    const extraSpace = canvasW - totalCardW - (row.length - 1) * CARD_GAP;
-    const extraPerCard = row.length > 1 ? Math.max(0, extraSpace / row.length) : 0;
-
-    let cardX = CANVAS_PADDING;
-    for (const card of row) {
-      card.placedW = card.naturalW + extraPerCard;
-      card.placedH = rowH;
-      card.placedX = cardX;
-      card.placedY = rowY;
-      cardX += card.placedW + CARD_GAP;
-    }
-
-    rowY += rowH + ROW_GAP;
-  }
 
   // ── Create ReactFlow nodes ────────────────
   for (const card of cards) {

@@ -58,6 +58,26 @@ html, body, #root {
    React Flow / @xyflow Overrides
    ═══════════════════════════════════════════ */
 
+/* CRITICAL: Ensure edges are always above nodes */
+.react-flow__edges {
+  z-index: 1000 !important;
+}
+
+.react-flow__nodes {
+  z-index: 1 !important;
+}
+
+/* Edge paths should be above everything */
+.react-flow__edge {
+  z-index: 1001 !important;
+  pointer-events: all !important;
+}
+
+/* Selected edges should be even higher */
+.react-flow__edge.selected {
+  z-index: 1002 !important;
+}
+
 .react-flow__background {
   background: var(--bg-void) !important;
 }

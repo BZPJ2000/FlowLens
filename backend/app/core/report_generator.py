@@ -309,6 +309,21 @@ class ReportGenerator:
                 suggestion="检查这些文件是否为死代码，或是否需要被其他模块引用。",
             ))
 
+        # 3.5 类型不匹配
+        type_mismatch = self._diagnose_type_mismatches(parse_results, ai_map, graph)
+        if type_mismatch:
+            issues.append(type_mismatch)
+
+        # 3.6 重复公开名
+        duplicate_exports = self._diagnose_duplicate_exports(ai_results)
+        if duplicate_exports:
+            issues.append(duplicate_exports)
+
+        # 3.7 高度耦合
+        high_coupling = self._diagnose_high_coupling(parse_results, graph)
+        if high_coupling:
+            issues.append(high_coupling)
+
         # 5. 重依赖文件（导入过多）
         heavy_importers = []
         for ai in ai_results:
@@ -358,6 +373,143 @@ class ReportGenerator:
             ))
 
         return issues
+
+    # ── 高级诊断: 类型不匹配 ──────────────────
+
+    def _diagnose_type_mismatches(
+        self,
+        parse_results: list[ParseResult],
+        ai_map: dict[str, AIFileAnalysis],
+        graph: DataFlowGraph,
+    ) -> ArchitectureIssue | None:
+        """检测导入声明类型与导出声明类型不一致的连接。
+
+        策略: 遍历每条 IMPORT 边，用 variable_name 匹配导入方和导出方的类型。
+        """
+        # 建立 {文件路径: {导出变量名 → data_type}} 索引
+        export_types: dict[str, dict[str, str]] = {}
+        for ai in ai_map.values():
+            export_types[ai.file_path] = {
+                o.name: o.type for o in ai.outputs
+            }
+
+        # 建立 node_id → file_path
+        node_paths = {n.id: n.file_path for n in graph.nodes}
+
+        # 检查 IMPORT 边
+        mismatches: list[str] = []
+        for edge in graph.edges:
+            edge_type = getattr(edge, "edge_type", None)
+            edge_type_val = edge_type.value if hasattr(edge_type, "value") else str(edge_type)
+            if edge_type_val != "import":
+                continue
+            source_path = node_paths.get(edge.source_node_id, "")
+            target_ai = ai_map.get(node_paths.get(edge.target_node_id, ""))
+            if not source_path or not target_ai:
+                continue
+
+            source_exports = export_types.get(source_path, {})
+            source_type = source_exports.get(edge.variable_name)
+            if not source_type:
+                continue
+
+            # 找到导入方声明的类型
+            imp_type = ""
+            for inp in target_ai.inputs:
+                if inp.name == edge.variable_name:
+                    imp_type = inp.type
+                    break
+            if not imp_type:
+                continue
+
+            # 类型比对 (忽略 "unknown" 和泛型差异)
+            if (source_type != "unknown" and imp_type != "unknown"
+                    and source_type != imp_type
+                    and source_type.lower() != imp_type.lower()):
+                mismatches.append(
+                    f"`{edge.variable_name}`: "
+                    f"导出 `{source_type}` → 导入声明 `{imp_type}`"
+                )
+
+        if not mismatches:
+            return None
+
+        return ArchitectureIssue(
+            severity="error",
+            category="type_mismatch",
+            description=(
+                f"发现 {len(mismatches)} 个类型不匹配: "
+                f"{'; '.join(mismatches[:5])}"
+                f"{'...' if len(mismatches) > 5 else ''}"
+            ),
+            related_files=[],
+            suggestion="检查导入声明类型是否与导出类型一致，确保类型注解准确。",
+        )
+
+    # ── 高级诊断: 重复公开名 ──────────────────
+
+    def _diagnose_duplicate_exports(
+        self, ai_results: list[AIFileAnalysis],
+    ) -> ArchitectureIssue | None:
+        """检测多个文件导出同名符号（可能造成混淆）。"""
+        name_files: dict[str, list[str]] = {}
+        for ai in ai_results:
+            for out in ai.outputs:
+                if out.name and out.name != "default":
+                    name_files.setdefault(out.name, []).append(ai.file_path)
+
+        dups = {n: fs for n, fs in name_files.items() if len(fs) > 1}
+        if not dups:
+            return None
+
+        examples = [
+            f"`{n}` ({len(fs)}个文件: {', '.join(f'`{f}`' for f in fs[:3])})"
+            for n, fs in sorted(dups.items(), key=lambda x: -len(x[1]))[:5]
+        ]
+        return ArchitectureIssue(
+            severity="info",
+            category="duplicate_export_names",
+            description=(
+                f"发现 {len(dups)} 个跨文件同名导出: {'; '.join(examples)}"
+            ),
+            related_files=sorted({f for fs in dups.values() for f in fs}),
+            suggestion="同名导出可能造成命名冲突，考虑重命名或使用命名空间。",
+        )
+
+    # ── 高级诊断: 高度耦合模块 ────────────────
+
+    def _diagnose_high_coupling(
+        self, parse_results: list[ParseResult],
+        graph: DataFlowGraph,
+    ) -> ArchitectureIssue | None:
+        """检测被大量文件导入的高扇出模块（修改影响面大）。"""
+        fan_out: dict[str, int] = {}
+        for edge in graph.edges:
+            fan_out[edge.source_node_id] = fan_out.get(edge.source_node_id, 0) + 1
+
+        node_paths = {n.id: n.file_path for n in graph.nodes}
+        high = [
+            (nid, count) for nid, count in fan_out.items()
+            if count > 10
+        ]
+        if not high:
+            return None
+
+        high.sort(key=lambda x: -x[1])
+        examples = [
+            f"`{node_paths.get(nid, nid[:8])}` ({count}个消费者)"
+            for nid, count in high[:5]
+        ]
+        return ArchitectureIssue(
+            severity="warning",
+            category="high_coupling",
+            description=(
+                f"发现 {len(high)} 个高扇出模块（>10 个消费者）: "
+                f"{'; '.join(examples)}"
+            ),
+            related_files=[node_paths.get(n, n) for n, _ in high],
+            suggestion="高扇出模块的修改影响面大，考虑是否可以通过接口/抽象降低耦合。",
+        )
 
     # ── 核心数据流 ────────────────────────────
 

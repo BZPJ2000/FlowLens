@@ -38,6 +38,7 @@ from app.db.repository import (
 from app.db.models import FileNode
 from app.services.import_service import import_service
 from app.services.progress_manager import progress_manager, Step
+from app.services.analyzer import run_analysis
 from app.core.graph_builder import graph_builder, analyze_impact
 from app.core.graphml_exporter import export_graphml
 from app.core.html_exporter import export_html

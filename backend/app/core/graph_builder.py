@@ -815,5 +815,81 @@ class GraphBuilder:
         return ""
 
 
+def analyze_impact(
+    node_id: str,
+    nodes: list[GraphNode],
+    edges: list[GraphEdge],
+    max_depth: int = 10,
+) -> list[dict]:
+    """变更影响分析: 计算选中节点的所有直接+传递依赖者及风险评分。
+
+    返回按风险评分降序排列的影响清单: [{file_path, file_name, depth, risk_score}]
+    风险评分 1-10:
+    - depth 0 (直接): 基准 7，每 1 个消费者 +0.5，上限 10
+    - depth 1: 基准 4，每 1 个消费者 +0.3，上限 7
+    - depth 2+: 基准 2，上限 4
+    """
+    # 构建反向邻接表 (target → source) + 正向邻接表（计数）
+    adj: dict[str, list[str]] = {}
+    fan_out: dict[str, int] = {}
+    for e in edges:
+        adj.setdefault(e.target_node_id, []).append(e.source_node_id)
+        fan_out[e.source_node_id] = fan_out.get(e.source_node_id, 0) + 1
+
+    if node_id not in adj and not any(
+        e.source_node_id == node_id for e in edges
+    ):
+        return []  # 无消费者
+
+    # BFS 从选中节点出发，沿反向边找到所有依赖者
+    from collections import deque
+    visited: dict[str, int] = {}  # {node_id: depth}
+    q = deque()
+    # 找到所有直接消费者
+    for consumer in adj.get(node_id, []):
+        if consumer not in visited:
+            visited[consumer] = 1
+            q.append(consumer)
+
+    while q:
+        current = q.popleft()
+        depth = visited[current]
+        if depth >= max_depth:
+            continue
+        for consumer in adj.get(current, []):
+            if consumer not in visited and consumer != node_id:
+                visited[consumer] = depth + 1
+                q.append(consumer)
+
+    # 构建 node_id → 文件名 映射
+    node_map = {n.id: n for n in nodes}
+
+    # 计算风险评分并排序
+    results = []
+    for nid, depth in visited.items():
+        node = node_map.get(nid)
+        if not node:
+            continue
+        consumer_count = fan_out.get(nid, 0)
+        if depth == 1:
+            risk = min(10, 7 + consumer_count * 0.5)
+        elif depth == 2:
+            risk = min(7, 4 + consumer_count * 0.3)
+        else:
+            risk = min(4, 2 + consumer_count * 0.2)
+
+        results.append({
+            "file_path": node.file_path,
+            "file_name": node.file_name,
+            "node_id": nid,
+            "depth": depth,
+            "risk_score": round(risk, 1),
+            "consumer_count": consumer_count,
+        })
+
+    results.sort(key=lambda x: (-x["risk_score"], x["depth"]))
+    return results
+
+
 # 单例
 graph_builder = GraphBuilder()

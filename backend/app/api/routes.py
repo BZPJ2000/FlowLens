@@ -38,8 +38,8 @@ from app.db.repository import (
 from app.db.models import FileNode
 from app.services.import_service import import_service
 from app.services.progress_manager import progress_manager, Step
-from app.services.analyzer import run_analysis
-from app.services.rag_service import rag_service
+from app.core.graph_builder import graph_builder, analyze_impact
+from app.core.graphml_exporter import export_graphml
 
 router = APIRouter(prefix="/api/v1")
 
@@ -784,3 +784,150 @@ async def chat_stream(
                 pass
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# ═══════════════════════════════════════════
+# Graph Export (GraphML)
+# ═══════════════════════════════════════════
+
+@router.get("/analyses/{analysis_id}/graph/export/graphml")
+async def export_graph_graphml(analysis_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """导出 GraphML 格式（兼容 Gephi/yEd/NetworkX）"""
+    aid = str(analysis_id)
+    a = await AnalysisRepo.get(db, aid)
+    if not a:
+        raise HTTPException(404, "分析不存在")
+
+    nodes_raw = await FileNodeRepo.get_by_analysis(db, aid)
+    edges_raw = await DataEdgeRepo.get_by_analysis(db, aid)
+
+    # 构建 DataFlowGraph
+    from app.models.schemas import DataFlowGraph, GraphNode, GraphEdge, EdgeType
+    nodes = []
+    for n in nodes_raw:
+        functions = []
+        for fn in (n.functions_json or []):
+            functions.append({
+                "id": make_fn_id(n.file_path, fn.get("name", "?")),
+                "name": fn.get("name", "?"),
+                "params": fn.get("params", []),
+                "return_type": fn.get("return_type", "unknown"),
+                "is_exported": fn.get("is_exported", False),
+                "is_async": fn.get("is_async", False),
+                "description": fn.get("description", ""),
+            })
+        classes = []
+        for cls in (n.classes_json or []):
+            cls_name = cls.get("name", "?")
+            methods = []
+            for m in (cls.get("methods") or []):
+                methods.append({
+                    "id": make_method_id(n.file_path, cls_name, m.get("name", "?")),
+                    "name": m.get("name", "?"),
+                    "params": m.get("params", []),
+                    "return_type": m.get("return_type", "unknown"),
+                    "is_exported": m.get("is_exported", False),
+                    "is_async": m.get("is_async", False),
+                    "description": m.get("description", ""),
+                })
+            classes.append({
+                "id": make_class_id(n.file_path, cls_name),
+                "name": cls_name,
+                "is_exported": cls.get("is_exported", False),
+                "methods": methods,
+            })
+        nodes.append(GraphNode(
+            id=str(n.id),
+            file_path=n.file_path,
+            file_name=n.file_name,
+            language=n.language,
+            summary=n.summary or "",
+            architecture_role=n.architecture_role or "",
+            functions=functions,
+            classes=classes,
+        ))
+
+    edges = []
+    for e in edges_raw:
+        edge_type_str = e.edge_type or "import"
+        try:
+            edge_type = EdgeType(edge_type_str)
+        except ValueError:
+            edge_type = EdgeType.IMPORT
+        edges.append(GraphEdge(
+            id=str(e.id),
+            source_node_id=str(e.from_file_id),
+            target_node_id=str(e.to_file_id),
+            variable_name=e.variable_name or "",
+            data_type=e.data_type or "unknown",
+            edge_type=edge_type,
+            label=e.variable_name or "",
+        ))
+
+    graph = DataFlowGraph(nodes=nodes, edges=edges, entry_points=[], exit_points=[])
+    project = await ProjectRepo.get(db, a.project_id)
+    project_name = project.name if project else "PoltAIshow"
+
+    graphml_content = export_graphml(graph, project_name)
+
+    from fastapi.responses import Response
+    return Response(
+        content=graphml_content,
+        media_type="application/xml",
+        headers={"Content-Disposition": f"attachment; filename={project_name}_graph.graphml"},
+    )
+
+
+# ═══════════════════════════════════════════
+# Change Impact Analysis
+# ═══════════════════════════════════════════
+
+@router.get("/analyses/{analysis_id}/impact/{node_id}")
+async def get_change_impact(
+    analysis_id: uuid.UUID, node_id: str, db: AsyncSession = Depends(get_db)
+):
+    """变更影响分析: 返回修改该文件会影响的所有文件 + 风险评分"""
+    aid = str(analysis_id)
+    a = await AnalysisRepo.get(db, aid)
+    if not a:
+        raise HTTPException(404, "分析不存在")
+
+    nodes_raw = await FileNodeRepo.get_by_analysis(db, aid)
+    edges_raw = await DataEdgeRepo.get_by_analysis(db, aid)
+
+    # 构建简化的 GraphNode/GraphEdge
+    from app.models.schemas import GraphNode, GraphEdge, EdgeType
+    nodes = [
+        GraphNode(
+            id=str(n.id),
+            file_path=n.file_path,
+            file_name=n.file_name,
+            language=n.language,
+            summary=n.summary or "",
+            architecture_role=n.architecture_role or "",
+            functions=[],
+            classes=[],
+        )
+        for n in nodes_raw
+    ]
+    edges = [
+        GraphEdge(
+            id=str(e.id),
+            source_node_id=str(e.from_file_id),
+            target_node_id=str(e.to_file_id),
+            variable_name=e.variable_name or "",
+            data_type=e.data_type or "unknown",
+            edge_type=EdgeType(e.edge_type) if e.edge_type else EdgeType.IMPORT,
+            label=e.variable_name or "",
+        )
+        for e in edges_raw
+    ]
+
+    impact = analyze_impact(node_id, nodes, edges)
+
+    return {
+        "source_node_id": node_id,
+        "affected_count": len(impact),
+        "affected_files": impact,
+    }
+

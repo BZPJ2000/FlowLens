@@ -10,6 +10,8 @@ export interface PortPosition {
 /**
  * Compute evenly-spaced vertical port positions within a given sidebar height.
  * Ports are distributed from top to bottom with equal spacing.
+ *
+ * Special case: when count === 1, position at exact center (50%)
  */
 export function computePortVerticalPositions(
   count: number,
@@ -17,11 +19,19 @@ export function computePortVerticalPositions(
   startOffset: number = 8,
 ): PortPosition[] {
   if (count <= 0) return [];
+
+  // Special case: single port → center it
+  if (count === 1) {
+    return [{ topPx: totalHeight / 2 }];
+  }
+
+  // Multiple ports: distribute evenly with padding
   const availableH = totalHeight - startOffset * 2;
   if (availableH <= 0) return Array.from({ length: count }, () => ({ topPx: startOffset }));
-  const spacing = availableH / Math.max(count, 1);
+
+  const spacing = availableH / (count - 1); // 改为 count-1，使端口分布在首尾之间
   return Array.from({ length: count }, (_, i) => ({
-    topPx: startOffset + spacing * i + spacing / 2,
+    topPx: startOffset + spacing * i,
   }));
 }
 

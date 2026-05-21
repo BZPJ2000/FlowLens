@@ -191,7 +191,7 @@ const FileGroupNode = memo(({ data, selected }: NodeProps) => {
                   />
                   <div
                     className="absolute left-2 right-1 flex items-center gap-1.5 pointer-events-none"
-                    style={{ top: pos.topPx - 10 }}
+                    style={{ top: pos.topPx - 10 }} // 标签垂直居中对齐 Handle
                   >
                     <span
                       className="w-2 h-2 rounded-full flex-shrink-0"

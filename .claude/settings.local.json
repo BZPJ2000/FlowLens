@@ -9,7 +9,8 @@
       "Bash(npx tsc:*)",
       "Bash(npx vite:*)",
       "Bash(curl:*)",
-      "Bash(python -c ':*)"
+      "Bash(python -c ':*)",
+      "Bash(python -m pytest tests/ -v)"
     ]
   }
 }

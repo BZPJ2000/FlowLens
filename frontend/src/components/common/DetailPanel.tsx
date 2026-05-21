@@ -1,7 +1,8 @@
-import { useEffect } from "react";
-import { X, FileCode, ArrowDownToLine, ArrowUpFromLine, Hash } from "lucide-react";
+import { useEffect, useState } from "react";
+import { X, FileCode, ArrowDownToLine, ArrowUpFromLine, Hash, ExternalLink, ChevronDown } from "lucide-react";
 import { useGraphStore } from "../../stores/graphStore";
 import { api } from "../../api/client";
+import { openInEditor, getPreferredEditor, setPreferredEditor, EDITORS, type EditorType } from "../../utils/editorLink";
 
 const TYPE_COLORS: Record<string, string> = {
   string: "#4ade80", number: "#60a5fa", boolean: "#f59e0b",
@@ -23,6 +24,9 @@ export default function DetailPanel() {
   const analysisId = useGraphStore((s) => s.analysisId);
   const graph = useGraphStore((s) => s.graph);
   const selectNode = useGraphStore((s) => s.selectNode);
+
+  const [preferredEditor, setPreferredEditorState] = useState<EditorType>(getPreferredEditor());
+  const [showEditorMenu, setShowEditorMenu] = useState(false);
 
   const selectedNode = graph?.nodes.find((n) => n.id === selectedNodeId);
 
@@ -67,6 +71,52 @@ export default function DetailPanel() {
             </div>
             <div className="text-[#f5f5f7] font-mono text-xs break-all bg-[#12121c] rounded px-2 py-1.5 border border-[#1e1e3a]">
               {selectedNode?.file_path || selectedFileDetail?.file_path}
+            </div>
+
+            {/* Open in Editor button */}
+            <div className="mt-2 relative">
+              <button
+                onClick={() => {
+                  const filePath = selectedNode?.file_path || selectedFileDetail?.file_path;
+                  if (filePath) openInEditor(preferredEditor, filePath);
+                }}
+                className="w-full flex items-center justify-center gap-2 px-3 py-1.5 text-xs bg-[#7c3aed]/10 hover:bg-[#7c3aed]/20 text-[#a78bfa] rounded border border-[#7c3aed]/20 hover:border-[#7c3aed]/40 transition-all"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Open in {EDITORS[preferredEditor].name}</span>
+              </button>
+
+              {/* Editor selector dropdown */}
+              <button
+                onClick={() => setShowEditorMenu(!showEditorMenu)}
+                className="absolute right-0 top-0 h-full px-2 hover:bg-[#7c3aed]/10 rounded-r border-l border-[#7c3aed]/20 transition-colors"
+              >
+                <ChevronDown className="w-3 h-3 text-[#a78bfa]" />
+              </button>
+
+              {showEditorMenu && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-[#12121c] border border-[#1e1e3a] rounded shadow-lg z-20 overflow-hidden">
+                  {(Object.keys(EDITORS) as EditorType[]).map((editor) => (
+                    <button
+                      key={editor}
+                      onClick={() => {
+                        setPreferredEditorState(editor);
+                        setPreferredEditor(editor);
+                        setShowEditorMenu(false);
+                      }}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-[#1a1a2e] transition-colors ${
+                        editor === preferredEditor ? "bg-[#7c3aed]/10 text-[#a78bfa]" : "text-[#a1a1aa]"
+                      }`}
+                    >
+                      <span>{EDITORS[editor].icon}</span>
+                      <span>{EDITORS[editor].name}</span>
+                      {editor === preferredEditor && (
+                        <span className="ml-auto text-[10px] text-[#7c3aed]">✓</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 

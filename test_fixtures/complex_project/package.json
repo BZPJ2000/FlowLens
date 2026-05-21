@@ -1,0 +1,12 @@
+{
+  "name": "complex-ecommerce-test",
+  "version": "1.0.0",
+  "description": "Complex test project for PoltAIshow - E-commerce system with multiple interdependencies",
+  "main": "index.ts",
+  "scripts": {
+    "test": "echo \"Test project for data flow visualization\""
+  },
+  "keywords": ["test", "ecommerce", "typescript"],
+  "author": "PoltAIshow Test",
+  "license": "MIT"
+}

@@ -461,67 +461,74 @@ ALTER TABLE projects ADD COLUMN user_id UUID REFERENCES users(id);
 
 ## 8. 开发阶段规划
 
-### Phase 0: 项目初始化（预计：项目骨架搭建）
+### Phase 0: 项目初始化（✅ 已完成）
 
-- [ ] 初始化后端项目结构（FastAPI + PostgreSQL + Redis）
-- [ ] 初始化前端项目结构（Vite + React + TypeScript）
-- [ ] Docker Compose 开发环境（PostgreSQL + Redis）
+- [x] 初始化后端项目结构（FastAPI + PostgreSQL + Redis）
+- [x] 初始化前端项目结构（Vite + React + TypeScript）
+- [x] Docker Compose 开发环境（PostgreSQL + Redis）
 - [ ] 基础 CI/CD（GitHub Actions: lint + test）
-- [ ] `.gitignore`、`README.md`、环境变量模板
+- [x] `.gitignore`、`README.md`、环境变量模板
 
-### Phase 1: 业务逻辑层（最重要）
+### Phase 1: 业务逻辑层（✅ 已完成）
 
 > 注意：这一阶段 **不写一行数据库代码，不写一行前端代码**
 
-- [ ] **Step 1.1: 定义数据模型（纯 Python dataclasses/Pydantic）**
+- [x] **Step 1.1: 定义数据模型（纯 Python dataclasses/Pydantic）**
   - Project、Analysis、FileNode、DataEdge、FunctionPort 等
   - 先定义类型，再定义关系
   - 用 Pydantic 做输入验证
 
-- [ ] **Step 1.2: 源码解析引擎**
+- [x] **Step 1.2: 源码解析引擎**
   - Tree-sitter 集成，支持 TypeScript/JavaScript/Python
   - 提取：文件树、import/export 语句、函数签名、类定义
   - 输出 AST 摘要（不交给 AI 的纯解析部分）
+  - **实现：** `parser.py` 支持 14 种语言（TS/JS/Python/Go/Java/C/C++/C#/Rust/Ruby/Swift/Kotlin/Vue/Svelte/Bash）
 
-- [ ] **Step 1.3: AI 分析引擎**
+- [x] **Step 1.3: AI 分析引擎**
   - 设计 Prompt 模板（系统提示词 + 每个文件的分析提示词）
   - Prompt 必须要求输出结构化 JSON
   - 批量分析 + 并发控制（限流、重试）
   - 上下文压缩策略：先解析 AST 摘要 → 把摘要发给 AI → AI 基于摘要分析
+  - **实现：** `ai_engine.py` + `rule_analyzer.py`（零 LLM 调用的规则分析器）
 
-- [ ] **Step 1.4: 关系构建引擎**
+- [x] **Step 1.4: 关系构建引擎**
   - 输入：所有文件的 AI 分析结果
   - 输出：Node 列表 + Edge 列表
   - 匹配规则：import 的变量名匹配 export 的变量名 → 建立连接
   - 类型推导：从导出方拿到类型，标注在边上
+  - **实现：** `graph_builder.py`
 
-- [ ] **Step 1.5: 单元测试**
+- [x] **Step 1.5: 单元测试**
   - 准备 2-3 个小项目（TypeScript 前端项目、Python 后端项目、混合项目）
   - 测试解析准确性
   - 测试关系构建准确性
+  - **状态：** 107 个测试全部通过
 
-### Phase 2: 数据库层
+### Phase 2: 数据库层（✅ 已完成）
 
 > 注意：基于 Phase 1 的实体模型建表
 
-- [ ] **Step 2.1: 创建数据库迁移脚本**
+- [x] **Step 2.1: 创建数据库迁移脚本**
   - 使用 Alembic（Python SQLAlchemy 迁移工具）
   - 按 5.1 节表设计创建所有表
+  - **实现：** `backend/app/db/migrations/`
 
-- [ ] **Step 2.2: 实现 Repository 层**
+- [x] **Step 2.2: 实现 Repository 层**
   - CRUD 封装，与业务逻辑解耦
   - 每个表对应一个 Repository 类
+  - **实现：** `backend/app/db/repository.py`
 
-- [ ] **Step 2.3: 数据持久化集成**
+- [x] **Step 2.3: 数据持久化集成**
   - 将 Phase 1 的解析结果写入数据库
   - JSONB 字段正确序列化/反序列化
   - TTL 清理任务（24小时过期数据）
+  - **实现：** `backend/app/db/models.py` + `database.py`
 
-### Phase 3: API 层
+### Phase 3: API 层（✅ 已完成）
 
 > 注意：这一阶段不写前端代码，用 Swagger UI / curl 测试
 
-- [ ] **Step 3.1: 核心 API 实现**
+- [x] **Step 3.1: 核心 API 实现**
   - `POST /api/projects/import` — 导入项目（GitHub URL 或上传 zip）
   - `GET /api/analyses/{id}/status` — 查询分析进度（支持 SSE）
   - `GET /api/analyses/{id}/graph` — 获取完整图数据（nodes + edges）
@@ -529,55 +536,71 @@ ALTER TABLE projects ADD COLUMN user_id UUID REFERENCES users(id);
   - `GET /api/analyses/{id}/report` — 获取/生成分析报告
   - `POST /api/analyses/{id}/chat` — 发送对话消息
   - `GET /api/analyses/{id}/chat/{session_id}` — 获取对话历史
+  - **实现：** `backend/app/api/routes.py`
 
-- [ ] **Step 3.2: 异步任务**
+- [x] **Step 3.2: 异步任务**
   - 分析任务放入 Celery 队列
   - 进度通过 WebSocket/SSE 推送给前端
   - 任务状态机：pending → parsing → analyzing → building → completed/failed
+  - **实现：** `backend/app/services/progress_manager.py`
 
-- [ ] **Step 3.3: API 测试**
+- [x] **Step 3.3: API 测试**
   - 用 pytest + httpx 写集成测试
   - 测试完整的导入→分析→查询流程
+  - **实现：** `backend/tests/test_api.py`
 
-### Phase 4: 前端层
+### Phase 4: 前端层（✅ 已完成）
 
 > 注意：这一阶段才开始写前端代码
 
-- [ ] **Step 4.1: 项目导入页**
+- [x] **Step 4.1: 项目导入页**
   - GitHub URL 输入框 + 粘贴按钮
   - 拖拽上传 zip 区域
   - 导入进度显示
+  - **实现：** `frontend/src/pages/ImportPage.tsx`
 
-- [ ] **Step 4.2: 数据流可视化画布**
+- [x] **Step 4.2: 数据流可视化画布**
   - React Flow 集成
   - 自定义节点组件（显示文件名、一句话总结）
   - 自定义边组件（显示变量名和数据类型）
   - 自定义端口组件（函数参数/返回值的接入点）
   - 画布交互：拖拽、缩放、小地图、自动布局
   - 数据流动画：光点沿连线流动
+  - **实现：** `frontend/src/components/graph/` (FlowCanvas, FileNode, DataFlowEdge, FunctionSubNode, MethodSubNode 等)
 
-- [ ] **Step 4.3: 文件详情面板**
+- [x] **Step 4.3: 文件详情面板**
   - 点击节点弹出侧边栏
   - 显示：详细解释、函数列表、导入/导出列表
   - 源码高亮显示
+  - **实现：** `frontend/src/components/common/DetailPanel.tsx`
 
-- [ ] **Step 4.4: 架构报告页**
+- [x] **Step 4.4: 架构报告页**
   - Markdown 渲染
   - 目录导航
   - 下载 PDF/Markdown
+  - **实现：** `frontend/src/pages/ReportPage.tsx`
 
-- [ ] **Step 4.5: 智能问答面板**
+- [x] **Step 4.5: 智能问答面板**
   - 聊天界面
   - 消息中引用的文件/函数可以点击跳转到图中
   - 流式输出（SSE）
+  - **实现：** `frontend/src/components/chat/ChatPanel.tsx`
 
-### Phase 5: 扩展与优化
+### Phase 5: 扩展与优化（🚧 进行中）
 
-- [ ] 更多语言支持（Go、Java、Rust）
+- [x] 更多语言支持（Go、Java、Rust）
+  - **已支持：** 14 种语言（TS/JS/Python/Go/Java/C/C++/C#/Rust/Ruby/Swift/Kotlin/Vue/Svelte/Bash）
 - [ ] 用户系统
 - [ ] 分析历史保存
 - [ ] 对比分析
-- [ ] 架构问题自动诊断（循环依赖检测、类型不匹配警告等）
+- [x] 架构问题自动诊断（循环依赖检测、类型不匹配警告等）
+  - **已实现：** 循环依赖检测、类型不匹配、重复导出、高度耦合检测
+- [x] **P0 功能：GraphML 导出 + 变更影响分析**
+  - **实现：** `backend/app/core/graphml_exporter.py` + 变更影响分析 API
+- [x] **P1 功能：编辑器 Deep Link + 自包含 HTML 导出**
+  - **实现：** `backend/app/core/html_exporter.py` + VSCode/Cursor deep link 支持
+- [x] **P2 功能：MCP 协议集成 + 函数内部控制流图**
+  - **实现：** `backend/mcp_server.py` + `backend/app/core/cfg_generator.py`
 
 ---
 

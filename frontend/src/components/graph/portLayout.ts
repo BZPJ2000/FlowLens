@@ -25,11 +25,18 @@ export function computePortVerticalPositions(
     return [{ topPx: totalHeight / 2 }];
   }
 
-  // Multiple ports: distribute evenly with padding
+  // Multiple ports: ensure minimum spacing to avoid label overlap
+  const MIN_PORT_SPACING = 32; // 最小间距，避免标签重叠
   const availableH = totalHeight - startOffset * 2;
+
   if (availableH <= 0) return Array.from({ length: count }, () => ({ topPx: startOffset }));
 
-  const spacing = availableH / (count - 1); // 改为 count-1，使端口分布在首尾之间
+  // 计算理想间距
+  const idealSpacing = availableH / (count - 1);
+
+  // 如果理想间距太小，使用最小间距并可能超出边界
+  const spacing = Math.max(idealSpacing, MIN_PORT_SPACING);
+
   return Array.from({ length: count }, (_, i) => ({
     topPx: startOffset + spacing * i,
   }));

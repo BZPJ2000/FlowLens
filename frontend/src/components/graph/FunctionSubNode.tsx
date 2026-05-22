@@ -48,6 +48,10 @@ const FunctionSubNode = memo(({ data, selected }: { data: FunctionSubNodeData; s
 
   const paramCount = d.params.length;
 
+  // 计算上下边的多个连接点位置
+  const topHandleCount = Math.max(1, Math.ceil(paramCount / 2)); // 上边至少1个点
+  const bottomHandleCount = Math.max(1, Math.ceil(paramCount / 2)); // 下边至少1个点
+
   return (
     <div
       className="relative rounded-md border transition-all duration-300"
@@ -64,33 +68,51 @@ const FunctionSubNode = memo(({ data, selected }: { data: FunctionSubNodeData; s
             : undefined,
       }}
     >
-      {/* ── Top handle (target, for connections from above) ── */}
-      <Handle
-        type="target"
-        position={Position.Top}
-        id="top"
-        style={{
-          background: "#a78bfa",
-          width: 7,
-          height: 7,
-          border: "2px solid #12121c",
-          opacity: dimmed ? 0.2 : 1,
-        }}
-      />
+      {/* ── Top handles (multiple connection points) ── */}
+      {Array.from({ length: topHandleCount }).map((_, idx) => {
+        const totalWidth = 200; // 假设节点宽度
+        const spacing = totalWidth / (topHandleCount + 1);
+        const leftPos = spacing * (idx + 1);
+        return (
+          <Handle
+            key={`top-${idx}`}
+            type="target"
+            position={Position.Top}
+            id={`top-${idx}`}
+            style={{
+              background: "#a78bfa",
+              width: 7,
+              height: 7,
+              border: "2px solid #12121c",
+              opacity: dimmed ? 0.2 : 1,
+              left: `${(leftPos / totalWidth) * 100}%`,
+            }}
+          />
+        );
+      })}
 
-      {/* ── Bottom handle (source, for connections going down) ── */}
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        id="bottom"
-        style={{
-          background: d.return_type && d.return_type !== "unknown" ? "#f59e0b" : "#60a5fa",
-          width: 7,
-          height: 7,
-          border: "2px solid #12121c",
-          opacity: dimmed ? 0.2 : 1,
-        }}
-      />
+      {/* ── Bottom handles (multiple connection points) ── */}
+      {Array.from({ length: bottomHandleCount }).map((_, idx) => {
+        const totalWidth = 200;
+        const spacing = totalWidth / (bottomHandleCount + 1);
+        const leftPos = spacing * (idx + 1);
+        return (
+          <Handle
+            key={`bottom-${idx}`}
+            type="source"
+            position={Position.Bottom}
+            id={`bottom-${idx}`}
+            style={{
+              background: d.return_type && d.return_type !== "unknown" ? "#f59e0b" : "#60a5fa",
+              width: 7,
+              height: 7,
+              border: "2px solid #12121c",
+              opacity: dimmed ? 0.2 : 1,
+              left: `${(leftPos / totalWidth) * 100}%`,
+            }}
+          />
+        );
+      })}
 
       {/* ── Global call handle (fallback, left top) ── */}
       <Handle

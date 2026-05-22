@@ -626,11 +626,11 @@ export function computeLayout(
       let edgeOffsetY = 0;
 
       if (e.edge_type === "port_to_function") {
-        sourceSide = Position.Left;
-        targetSide = Position.Left;
+        sourceSide = Position.Right; // 文件节点的输出端口在右侧
+        targetSide = Position.Left;  // 函数节点的输入在左侧
       } else if (e.edge_type === "function_to_port") {
-        sourceSide = Position.Right;
-        targetSide = Position.Right;
+        sourceSide = Position.Right; // 函数节点的输出在右侧
+        targetSide = Position.Right; // 文件节点的输入端口在右侧（同侧回流）
       } else if (srcNode && tgtNode) {
         const srcW = (srcNode.style?.width as number) || 240;
         const srcH = (srcNode.style?.height as number) || 60;

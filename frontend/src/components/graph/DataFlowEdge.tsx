@@ -10,7 +10,7 @@ function getSameSidePath(
   side: Position,
   laneOffset: number,
 ): [string, number, number] {
-  const laneGap = Math.max(18, 36 + laneOffset);
+  const laneGap = Math.max(40, 80 + laneOffset); // 大幅增加拐弯距离
   if (side === Position.Left) {
     const laneX = Math.min(sourceX, targetX) - laneGap;
     return [
@@ -116,7 +116,7 @@ const DataFlowEdge = memo((props: EdgeProps) => {
   const [edgePath, labelX, labelY] = routed || getSmoothStepPath({
     sourceX: sourceX + offsetX, sourceY: sourceY + offsetY, sourcePosition: srcSide,
     targetX: targetX + offsetX, targetY: targetY + offsetY, targetPosition: tgtSide,
-    borderRadius: 12,
+    borderRadius: 20, // 增加圆角半径，让拐弯更明显
   });
 
   const animating = d.animating !== false;

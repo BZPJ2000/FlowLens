@@ -195,8 +195,8 @@ function assignCoordinates(
   layeredNodes: LayeredNode[][],
   direction: 'horizontal' | 'vertical' = 'horizontal'
 ): void {
-  const LAYER_GAP = 300;  // 层间距离
-  const NODE_GAP = 80;    // 节点间距离
+  const LAYER_GAP = 500;  // 大幅增加层间距离，为连线留出空间
+  const NODE_GAP = 120;   // 增加节点间距离
   const PADDING = 100;    // 画布边距
 
   if (direction === 'horizontal') {

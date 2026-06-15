@@ -1,0 +1,2 @@
+"""Shared contracts for PoltAIshow."""
+

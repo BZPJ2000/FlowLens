@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "rootDir": ".",
+    "outDir": ".test-build",
+    "types": []
+  },
+  "include": [
+    "src/lib/graphModel.ts",
+    "src/types/index.ts",
+    "tests/**/*.ts"
+  ]
+}

@@ -1,158 +1,108 @@
-"""API integration tests — Phase 3 endpoints"""
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
 import pytest
-import pytest_asyncio
+
+import backend.app.main as main_module
+from backend.app.main import app
 
 
-# ═══════════════════════════════════════════
-# Health & Projects
-# ═══════════════════════════════════════════
+def test_local_project_import_builds_frontend_graph() -> None:
+    client = TestClient(app)
 
-@pytest.mark.asyncio(loop_scope="session")
-async def test_health_endpoint(client):
-    res = await client.get("/api/health")
-    assert res.status_code == 200
-    data = res.json()
-    assert data["status"] == "ok"
-
-
-@pytest.mark.asyncio(loop_scope="session")
-async def test_list_projects_empty(client):
-    res = await client.get("/api/v1/projects")
-    assert res.status_code == 200
-    assert isinstance(res.json(), list)
-
-
-# ═══════════════════════════════════════════
-# Import — creates project + analysis
-# ═══════════════════════════════════════════
-
-@pytest.mark.asyncio(loop_scope="session")
-async def test_import_invalid_url(client):
-    """Import with empty URL should return 400."""
-    res = await client.post("/api/v1/projects/import", json={
-        "source_type": "github", "source_url": "",
-    })
-    assert res.status_code == 400
-
-
-@pytest.mark.asyncio(loop_scope="session")
-async def test_import_creates_project(client):
-    """Import with a URL creates a project analysis (may fail at clone stage, but project + analysis should be created)."""
-    res = await client.post("/api/v1/projects/import", json={
-        "source_type": "github",
-        "source_url": "https://github.com/nonexistent/test-repo.git",
-    })
-    # Should return 200 or 202 with project_id + analysis_id
-    assert res.status_code == 200
-    data = res.json()
-    assert "project_id" in data
-    assert "analysis_id" in data
-    assert data["status"] == "pending"
-
-
-@pytest.mark.asyncio(loop_scope="session")
-async def test_list_projects_after_import(client):
-    """After import, the project should appear in the list."""
-    res = await client.get("/api/v1/projects")
-    assert res.status_code == 200
-    projects = res.json()
-    assert len(projects) >= 1
-    assert projects[0]["name"] == "test-repo"
-
-
-# ═══════════════════════════════════════════
-# Analysis status
-# ═══════════════════════════════════════════
-
-@pytest.mark.asyncio(loop_scope="session")
-async def test_get_analysis_not_found(client):
-    """Non-existent analysis returns 404."""
-    res = await client.get("/api/v1/analyses/00000000-0000-0000-0000-000000000000")
-    assert res.status_code == 404
-
-
-# ═══════════════════════════════════════════
-# Chat
-# ═══════════════════════════════════════════
-
-@pytest_asyncio.fixture(loop_scope="session")
-async def existing_analysis_id(client):
-    """Get any existing analysis ID from the project list."""
-    res = await client.get("/api/v1/projects")
-    projects = res.json()
-    if projects and projects[0].get("latest_analysis"):
-        return projects[0]["latest_analysis"]["analysis_id"]
-    return None
-
-
-@pytest.mark.asyncio(loop_scope="session")
-async def test_chat_creates_session(client, existing_analysis_id):
-    """Posting a chat message should create a session and return a reply."""
-    if not existing_analysis_id:
-        pytest.skip("No existing analysis to test chat against")
-
-    res = await client.post(f"/api/v1/analyses/{existing_analysis_id}/chat", json={
-        "message": "这个项目的主要架构是什么？",
-    })
-    assert res.status_code == 200
-    data = res.json()
-    assert "session_id" in data
-    assert "reply" in data
-    assert "referenced" in data
-
-
-@pytest.mark.asyncio(loop_scope="session")
-async def test_list_chat_sessions(client, existing_analysis_id):
-    """Chat sessions endpoint should return list."""
-    if not existing_analysis_id:
-        pytest.skip("No existing analysis")
-
-    res = await client.get(f"/api/v1/analyses/{existing_analysis_id}/chat/sessions")
-    assert res.status_code == 200
-    sessions = res.json()
-    assert isinstance(sessions, list)
-    assert len(sessions) >= 1
-    assert "session_id" in sessions[0]
-    assert "title" in sessions[0]
-    assert "created_at" in sessions[0]
-
-
-@pytest.mark.asyncio(loop_scope="session")
-async def test_get_chat_history(client, existing_analysis_id):
-    """Get chat history for a specific session."""
-    if not existing_analysis_id:
-        pytest.skip("No existing analysis")
-
-    # First get sessions list to find a session ID
-    res = await client.get(f"/api/v1/analyses/{existing_analysis_id}/chat/sessions")
-    sessions = res.json()
-    assert len(sessions) > 0
-    session_id = sessions[0]["session_id"]
-
-    # Get history
-    res = await client.get(f"/api/v1/analyses/{existing_analysis_id}/chat/{session_id}")
-    assert res.status_code == 200
-    messages = res.json()
-    assert isinstance(messages, list)
-    assert len(messages) >= 1  # at least the user message
-    assert messages[0]["role"] in ("user", "assistant")
-
-
-@pytest.mark.asyncio(loop_scope="session")
-async def test_list_sessions_nonexistent_analysis(client):
-    """List sessions for non-existent analysis returns 404."""
-    res = await client.get("/api/v1/analyses/00000000-0000-0000-0000-000000000000/chat/sessions")
-    assert res.status_code == 404
-
-
-@pytest.mark.asyncio(loop_scope="session")
-async def test_get_history_nonexistent_session(client, existing_analysis_id):
-    """Get history for non-existent session returns empty or 404."""
-    if not existing_analysis_id:
-        pytest.skip("No existing analysis")
-    # Use a random UUID that doesn't correspond to a session
-    res = await client.get(
-        f"/api/v1/analyses/{existing_analysis_id}/chat/00000000-0000-0000-0000-000000000000"
+    response = client.post(
+        "/api/v1/projects/import",
+        json={"source_type": "local", "source_url": "."},
     )
-    # Should return empty list (valid analysis, no such session → empty messages)
-    assert res.status_code in (200, 404)
+    assert response.status_code == 200
+    analysis_id = response.json()["analysis_id"]
+
+    status_response = client.get(f"/api/v1/analyses/{analysis_id}")
+    assert status_response.status_code == 200
+    assert status_response.json()["status"] == "completed"
+
+    graph_response = client.get(f"/api/v1/analyses/{analysis_id}/graph")
+    assert graph_response.status_code == 200
+    payload = graph_response.json()
+    assert payload["nodes"]
+    assert payload["edges"]
+    assert payload["project_files"]
+    assert any(node["language"] in {"python", "typescript", "javascript"} for node in payload["nodes"])
+    assert all("source_slot" in edge and "target_slot" in edge for edge in payload["edges"])
+    assert {edge["edge_type"] for edge in payload["edges"]} & {"call", "arg", "return"}
+
+    first_function = next(
+        node["functions"][0]
+        for node in payload["nodes"]
+        if node["functions"]
+    )
+    assert first_function["qualified_name"]
+    assert first_function["start_line"] >= 1
+    assert first_function["end_line"] >= first_function["start_line"]
+
+    file_id = payload["nodes"][0]["id"]
+    detail_response = client.get(f"/api/v1/analyses/{analysis_id}/files/{file_id}")
+    assert detail_response.status_code == 200
+    assert detail_response.json()["file_path"]
+
+    source_response = client.get(
+        f"/api/v1/analyses/{analysis_id}/source",
+        params={
+            "file_path": payload["nodes"][0]["file_path"],
+            "start_line": first_function["start_line"],
+            "end_line": first_function["end_line"],
+        },
+    )
+    assert source_response.status_code == 200
+    source_payload = source_response.json()
+    assert source_payload["content"]
+    assert source_payload["start_line"] == first_function["start_line"]
+
+    outside_response = client.get(
+        f"/api/v1/analyses/{analysis_id}/source",
+        params={"file_path": "C:/Windows/win.ini"},
+    )
+    assert outside_response.status_code in {403, 404}
+
+    selected_id = first_function["id"]
+    chat_response = client.post(
+        f"/api/v1/analyses/{analysis_id}/chat",
+        json={
+            "message": "解释我选中的符号关系",
+            "selected_symbol_ids": [selected_id],
+        },
+    )
+    assert chat_response.status_code == 200
+    assert first_function["qualified_name"] in chat_response.json()["reply"]
+
+
+def test_chat_uses_llm_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/projects/import",
+        json={"source_type": "local", "source_url": "."},
+    )
+    assert response.status_code == 200
+    analysis_id = response.json()["analysis_id"]
+
+    captured = {}
+
+    def fake_chat_text(messages, **kwargs):
+        captured["messages"] = messages
+        captured["kwargs"] = kwargs
+        return "LLM answer from DeepSeek"
+
+    monkeypatch.setattr(main_module, "chat_text", fake_chat_text)
+    monkeypatch.setenv("POLTAISHOW_LLM_ENABLED", "true")
+    monkeypatch.setenv("TEXT_AI_API_KEY", "test-key")
+    monkeypatch.setenv("TEXT_AI_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setenv("TEXT_AI_MODEL", "deepseek-chat")
+
+    chat_response = client.post(
+        f"/api/v1/analyses/{analysis_id}/chat",
+        json={"message": "总结这个项目"},
+    )
+
+    assert chat_response.status_code == 200
+    assert chat_response.json()["reply"] == "LLM answer from DeepSeek"
+    assert "项目静态分析上下文" in captured["messages"][1]["content"]

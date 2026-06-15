@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "poltaishow-static-flow-viewer"
+version = "0.1.0"
+description = "Language-neutral static function and value-flow viewer with Python and Tree-sitter adapters."
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+  "fastapi>=0.115",
+  "python-multipart>=0.0.9",
+  "tree-sitter>=0.25",
+  "tree-sitter-typescript>=0.23",
+  "uvicorn[standard]>=0.30",
+]
+
+[project.scripts]
+poltaishow = "resources.scripts.function_analyzer:main"
+poltaishow-graph = "resources.scripts.script_graph:main"
+
+[tool.setuptools]
+packages = [
+  "backend",
+  "backend.app",
+  "contracts",
+  "contracts.static_flow",
+  "modules",
+  "modules.static_flow",
+  "resources",
+  "resources.scripts",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra --import-mode=importlib"
+testpaths = [
+  "backend/tests",
+  "tests",
+]
+python_files = [
+  "test_*.py",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

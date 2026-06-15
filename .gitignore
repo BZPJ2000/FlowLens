@@ -1,40 +1,31 @@
-# Python
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.pytest_tmp/
+.pytest_tmp*/
+.beads/
+.claude/
 __pycache__/
 *.py[cod]
-*.egg-info/
 .venv/
-venv/
-*.egg
-
-# Node
-node_modules/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
 dist/
-.vite/
-
-# Env
-.env
-.env.local
-
-# IDE
-.idea/
-.vscode/
-.vs/
-*.swp
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Uploads
-backend/uploads/
-backend/*.zip
-
-# Docker
-pgdata/
-
-# Beads / Dolt files (added by bd init)
-.dolt/
-*.db
-*.db-shm
-*.db-wal
-.beads-credential-key
+build/
+frontend/node_modules/
+frontend/dist/
+frontend/.test-build/
+frontend/tsconfig.tsbuildinfo
+_archive/
+.codegraph/
+.superpowers/
+logs/*.log
+*.log
+self-scan.json
+project-flow.json
+project_flow.*
+*_flow.dot
+*_flow.png
+call_graph.*

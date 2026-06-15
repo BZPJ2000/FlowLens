@@ -1,7 +1,0 @@
-{
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "embedded",
-  "dolt_database": "PoltAIshow",
-  "project_id": "31a0fdb9-731f-41eb-b987-d56f2f3dee97"
-}

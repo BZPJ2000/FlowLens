@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════
-// 前端类型定义 — 与后端 Pydantic models 对应
-// ═══════════════════════════════════════════
-
 export type AnalysisStatus =
   | "pending"
   | "parsing"
@@ -10,29 +6,32 @@ export type AnalysisStatus =
   | "completed"
   | "failed";
 
+export interface ParamNode {
+  name: string;
+  type: string;
+}
+
 export interface FunctionNode {
   id: string;
   name: string;
-  params: { name: string; type: string }[];
+  qualified_name?: string;
+  start_line?: number;
+  end_line?: number;
+  params: ParamNode[];
   return_type: string;
   is_exported: boolean;
   is_async: boolean;
   description: string;
 }
 
-export interface MethodNode {
-  id: string;
-  name: string;
-  params: { name: string; type: string }[];
-  return_type: string;
-  is_exported: boolean;
-  is_async: boolean;
-  description: string;
-}
+export interface MethodNode extends FunctionNode {}
 
 export interface ClassNode {
   id: string;
   name: string;
+  qualified_name?: string;
+  start_line?: number;
+  end_line?: number;
   is_exported: boolean;
   methods: MethodNode[];
 }
@@ -72,7 +71,20 @@ export interface GraphEdge {
   target_function_id: string;
   variable_name: string;
   data_type: string;
-  edge_type: "import" | "call" | "export" | "port_to_function" | "function_to_port";
+  edge_type:
+    | "call"
+    | "arg"
+    | "return"
+    | "unresolved_call"
+    | "contains"
+    | "import"
+    | "export"
+    | "port_to_function"
+    | "function_to_port";
+  source_slot?: string | null;
+  target_slot?: string | null;
+  line_number?: number | null;
+  resolution?: "resolved" | "partial" | "unresolved";
   label: string;
 }
 
@@ -81,52 +93,85 @@ export interface DataFlowGraph {
   edges: GraphEdge[];
   entry_points: string[];
   exit_points: string[];
+  project_files?: ProjectFile[];
+}
+
+export interface ProjectFile {
+  id: string;
+  file_path: string;
+  file_name: string;
+  folder_path: string;
+  language: string;
+  has_symbols: boolean;
+  symbol_count: number;
+}
+
+export interface ProjectSummary {
+  project_id: string;
+  name: string;
+  source_type: string;
+  source_url: string;
+  file_count: number;
+  created_at: string;
+  latest_analysis: {
+    analysis_id: string;
+    status: AnalysisStatus;
+    progress_pct: number;
+    error_message: string;
+  } | null;
 }
 
 export interface AnalysisProgress {
-  analysis_id: string;
+  analysis_id?: string;
+  id?: string;
   status: AnalysisStatus;
   progress_pct: number;
-  message: string;
-  current_step: string;
-}
-
-export interface AIInputOutput {
-  name: string;
-  type: string;
-  source: string;
-  is_function: boolean;
-  description: string;
+  message?: string;
+  detail?: string;
+  file_count?: number;
+  error_message?: string;
 }
 
 export interface AIFileAnalysis {
   file_path: string;
   summary: string;
   detail: string;
-  inputs: AIInputOutput[];
-  outputs: AIInputOutput[];
+  inputs: {
+    name: string;
+    type: string;
+    source: string;
+    is_function: boolean;
+    description: string;
+  }[];
+  outputs: {
+    name: string;
+    type: string;
+    source: string;
+    is_function: boolean;
+    description: string;
+  }[];
   internal_structures: Record<string, unknown>[];
   architecture_role: string;
   dependencies_summary: string;
 }
 
-export interface ArchitectureIssue {
-  severity: "info" | "warning" | "error";
-  category: string;
-  description: string;
-  related_files: string[];
-  suggestion: string;
+export interface ImportResult {
+  project_id: string;
+  analysis_id: string;
+  status: AnalysisStatus;
 }
 
-export interface AnalysisReport {
-  project_name: string;
-  tech_stack: string[];
-  file_count: number;
+export interface ChatResult {
+  session_id: string;
+  reply: string;
+  referenced: string[];
+}
+
+export interface SourceFile {
+  file_path: string;
+  language: string;
+  start_line: number;
+  end_line: number;
   total_lines: number;
-  architecture_summary: string;
-  file_details: AIFileAnalysis[];
-  core_flows: string[];
-  issues: ArchitectureIssue[];
-  health_score: number;
-  generated_at: string;
+  content: string;
 }

@@ -8,325 +8,526 @@ import type {
   ProjectFile,
 } from "../types";
 
-export type SymbolKind = "function" | "method" | "class";
-export type TraceEdgeKind = "call" | "arg" | "return" | "unknown";
+export type CodeNodeKind = "folder" | "file" | "class" | "function" | "method" | "variable";
+export type CodeEdgeKind = "contains" | "call" | "arg" | "return" | "unresolved" | "reference";
 
-export interface SymbolNode {
+export interface CodeGraphNode {
   id: string;
-  name: string;
-  qualifiedName: string;
-  kind: SymbolKind;
-  fileId: string;
-  filePath: string;
-  fileName: string;
-  folderPath: string;
-  language: string;
-  role: string;
-  params: { name: string; type: string }[];
-  returnType: string;
-  description: string;
-  startLine: number | null;
-  endLine: number | null;
-  parentClassId?: string;
-  parentClassName?: string;
-}
-
-export interface TraceEdge {
-  id: string;
-  sourceId: string;
-  targetId: string;
-  sourceFileId: string;
-  targetFileId: string;
-  kind: TraceEdgeKind;
-  variableName: string;
-  sourceSlot: string | null;
-  targetSlot: string | null;
-  dataType: string;
+  kind: CodeNodeKind;
   label: string;
-  lineNumber: number | null;
-  isCrossFile: boolean;
+  subtitle: string;
+  folderPath: string;
+  fileId?: string;
+  filePath?: string;
+  fileName?: string;
+  language?: string;
+  role?: string;
+  parentId?: string;
+  qualifiedName?: string;
+  startLine?: number | null;
+  endLine?: number | null;
+  params?: { name: string; type: string }[];
+  returnType?: string;
+  symbolCount?: number;
+  edgeCount: number;
+  source?: GraphNode | FunctionNode | ClassNode | MethodNode | ProjectFile;
 }
 
-export interface ProjectGraphModel {
-  symbols: SymbolNode[];
-  edges: TraceEdge[];
-  files: GraphNode[];
+export interface CodeGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  kind: CodeEdgeKind;
+  label: string;
+  dataType?: string;
+  lineNumber?: number | null;
+  original?: GraphEdge;
+}
+
+export interface CodeGraphModel {
+  nodes: CodeGraphNode[];
+  edges: CodeGraphEdge[];
+  folders: CodeGraphNode[];
+  files: CodeGraphNode[];
+  symbols: CodeGraphNode[];
+  variables: CodeGraphNode[];
   projectFiles: ProjectFile[];
-  modules: string[];
-  entrySymbols: string[];
-  exitSymbols: string[];
   orphanEdgeCount: number;
 }
 
 export interface GraphStats {
+  folderCount: number;
   fileCount: number;
-  symbolCount: number;
   classCount: number;
   functionCount: number;
   methodCount: number;
+  variableCount: number;
   edgeCount: number;
   callCount: number;
   argCount: number;
   returnCount: number;
-  crossFileCount: number;
 }
 
-export interface SymbolNeighborhood {
-  incoming: TraceEdge[];
-  outgoing: TraceEdge[];
+export interface NodeNeighborhood {
+  incoming: CodeGraphEdge[];
+  outgoing: CodeGraphEdge[];
   relatedIds: Set<string>;
 }
 
-export function buildProjectGraphModel(graph: DataFlowGraph | null): ProjectGraphModel {
+export function buildCodeGraphModel(graph: DataFlowGraph | null): CodeGraphModel {
   if (!graph) {
-    return {
-      symbols: [],
-      edges: [],
-      files: [],
-      projectFiles: [],
-      modules: [],
-      entrySymbols: [],
-      exitSymbols: [],
-      orphanEdgeCount: 0,
-    };
+    return emptyModel();
   }
 
-  const symbols: SymbolNode[] = [];
+  const projectFiles = normalizeProjectFiles(graph);
+  const nodes = new Map<string, CodeGraphNode>();
+  const edges = new Map<string, CodeGraphEdge>();
+  const fileNodeByBackendId = new Map<string, CodeGraphNode>();
   const symbolIds = new Set<string>();
+  let orphanEdgeCount = 0;
 
-  for (const file of graph.nodes) {
-    for (const fn of file.functions) {
-      const symbol = functionToSymbol(file, fn);
-      symbols.push(symbol);
-      symbolIds.add(symbol.id);
+  for (const file of projectFiles) {
+    ensureFolderChain(file.folder_path, nodes, edges);
+  }
+
+  for (const backendFile of graph.nodes) {
+    const fileNode = toFileNode(backendFile);
+    nodes.set(fileNode.id, fileNode);
+    fileNodeByBackendId.set(backendFile.id, fileNode);
+    linkFolderToFile(fileNode, nodes, edges);
+
+    for (const fn of backendFile.functions ?? []) {
+      const symbolNode = toFunctionNode(backendFile, fn);
+      nodes.set(symbolNode.id, symbolNode);
+      symbolIds.add(symbolNode.id);
+      addEdge(edges, {
+        id: `contains:${backendFile.id}:${fn.id}`,
+        source: fileNode.id,
+        target: symbolNode.id,
+        kind: "contains",
+        label: "defines",
+      });
     }
 
-    for (const cls of file.classes) {
-      const classSymbol = classToSymbol(file, cls);
-      symbols.push(classSymbol);
-      symbolIds.add(classSymbol.id);
+    for (const cls of backendFile.classes ?? []) {
+      const classNode = toClassNode(backendFile, cls);
+      nodes.set(classNode.id, classNode);
+      symbolIds.add(classNode.id);
+      addEdge(edges, {
+        id: `contains:${backendFile.id}:${cls.id}`,
+        source: fileNode.id,
+        target: classNode.id,
+        kind: "contains",
+        label: "class",
+      });
 
-      for (const method of cls.methods) {
-        const methodSymbol = methodToSymbol(file, cls, method);
-        symbols.push(methodSymbol);
-        symbolIds.add(methodSymbol.id);
+      for (const method of cls.methods ?? []) {
+        const methodNode = toMethodNode(backendFile, cls, method);
+        nodes.set(methodNode.id, methodNode);
+        symbolIds.add(methodNode.id);
+        addEdge(edges, {
+          id: `contains:${cls.id}:${method.id}`,
+          source: classNode.id,
+          target: methodNode.id,
+          kind: "contains",
+          label: "method",
+        });
       }
     }
   }
 
-  const traceEdges: TraceEdge[] = [];
-  let orphanEdgeCount = 0;
+  for (const projectFile of projectFiles) {
+    if (nodes.has(projectFile.id)) continue;
+    const fileNode = toProjectFileNode(projectFile);
+    nodes.set(fileNode.id, fileNode);
+    linkFolderToFile(fileNode, nodes, edges);
+  }
+
   for (const edge of graph.edges) {
-    if (!edge.source_function_id || !edge.target_function_id) {
+    const sourceId = edge.source_function_id || edge.source_node_id;
+    const targetId = edge.target_function_id || edge.target_node_id;
+    const hasSource = nodes.has(sourceId) || symbolIds.has(sourceId);
+    const hasTarget = nodes.has(targetId) || symbolIds.has(targetId);
+    if (!hasSource || !hasTarget) {
       orphanEdgeCount += 1;
       continue;
     }
-    if (!symbolIds.has(edge.source_function_id) || !symbolIds.has(edge.target_function_id)) {
-      orphanEdgeCount += 1;
+
+    const relationshipKind = edgeKind(edge);
+    if (relationshipKind === "arg" || relationshipKind === "return") {
+      const sourceNode = nodes.get(sourceId);
+      const targetNode = nodes.get(targetId);
+      const variableNode = toVariableNode(edge, relationshipKind, sourceNode, targetNode);
+      nodes.set(variableNode.id, variableNode);
+      addEdge(edges, {
+        id: `${edge.id}:source`,
+        source: sourceId,
+        target: variableNode.id,
+        kind: relationshipKind,
+        label: edge.source_slot || edge.variable_name || relationshipKind,
+        dataType: edge.data_type,
+        lineNumber: edge.line_number ?? null,
+        original: edge,
+      });
+      addEdge(edges, {
+        id: `${edge.id}:target`,
+        source: variableNode.id,
+        target: targetId,
+        kind: relationshipKind,
+        label: edge.target_slot || edge.variable_name || relationshipKind,
+        dataType: edge.data_type,
+        lineNumber: edge.line_number ?? null,
+        original: edge,
+      });
       continue;
     }
-    traceEdges.push(toTraceEdge(edge));
+
+    addEdge(edges, {
+      id: edge.id,
+      source: sourceId,
+      target: targetId,
+      kind: relationshipKind,
+      label: readableEdgeLabel(edge),
+      dataType: edge.data_type,
+      lineNumber: edge.line_number ?? null,
+      original: edge,
+    });
   }
 
-  const incoming = new Map<string, number>();
-  const outgoing = new Map<string, number>();
-  for (const edge of traceEdges) {
-    outgoing.set(edge.sourceId, (outgoing.get(edge.sourceId) ?? 0) + 1);
-    incoming.set(edge.targetId, (incoming.get(edge.targetId) ?? 0) + 1);
-  }
-
+  const nodeList = addEdgeCounts(Array.from(nodes.values()), Array.from(edges.values()));
+  const edgeList = Array.from(edges.values());
   return {
-    symbols,
-    edges: traceEdges,
-    files: graph.nodes,
-    projectFiles: graph.project_files?.length
-      ? graph.project_files
-      : graph.nodes.map((node) => ({
-          id: node.id,
-          file_path: node.file_path,
-          file_name: node.file_name,
-          folder_path: node.folder_path,
-          language: node.language,
-          has_symbols: node.functions.length + node.classes.length > 0,
-          symbol_count:
-            node.functions.length +
-            node.classes.length +
-            node.classes.reduce((sum, item) => sum + item.methods.length, 0),
-        })),
-    modules: Array.from(
-      new Set(graph.nodes.map((node) => node.folder_path || "(root)")),
-    ).sort((a, b) => a.localeCompare(b)),
-    entrySymbols: symbols
-      .filter((symbol) => !incoming.has(symbol.id) && (outgoing.get(symbol.id) ?? 0) > 0)
-      .map((symbol) => symbol.id),
-    exitSymbols: symbols
-      .filter((symbol) => !outgoing.has(symbol.id) && (incoming.get(symbol.id) ?? 0) > 0)
-      .map((symbol) => symbol.id),
+    nodes: nodeList,
+    edges: edgeList,
+    folders: nodeList.filter((node) => node.kind === "folder"),
+    files: nodeList.filter((node) => node.kind === "file"),
+    symbols: nodeList.filter((node) =>
+      node.kind === "class" || node.kind === "function" || node.kind === "method",
+    ),
+    variables: nodeList.filter((node) => node.kind === "variable"),
+    projectFiles,
     orphanEdgeCount,
   };
 }
 
-export function getGraphStats(model: ProjectGraphModel): GraphStats {
+export function getGraphStats(model: CodeGraphModel): GraphStats {
   return {
+    folderCount: model.folders.length,
     fileCount: model.files.length,
-    symbolCount: model.symbols.length,
-    classCount: model.symbols.filter((symbol) => symbol.kind === "class").length,
-    functionCount: model.symbols.filter((symbol) => symbol.kind === "function").length,
-    methodCount: model.symbols.filter((symbol) => symbol.kind === "method").length,
+    classCount: model.nodes.filter((node) => node.kind === "class").length,
+    functionCount: model.nodes.filter((node) => node.kind === "function").length,
+    methodCount: model.nodes.filter((node) => node.kind === "method").length,
+    variableCount: model.variables.length,
     edgeCount: model.edges.length,
     callCount: model.edges.filter((edge) => edge.kind === "call").length,
     argCount: model.edges.filter((edge) => edge.kind === "arg").length,
     returnCount: model.edges.filter((edge) => edge.kind === "return").length,
-    crossFileCount: model.edges.filter((edge) => edge.isCrossFile).length,
   };
 }
 
-export function getSymbolNeighborhood(
-  model: ProjectGraphModel,
-  symbolId: string | null,
-): SymbolNeighborhood {
-  if (!symbolId) {
+export function getNodeNeighborhood(
+  model: CodeGraphModel,
+  nodeId: string | null,
+): NodeNeighborhood {
+  if (!nodeId) {
     return { incoming: [], outgoing: [], relatedIds: new Set() };
   }
-  const incoming = model.edges.filter((edge) => edge.targetId === symbolId);
-  const outgoing = model.edges.filter((edge) => edge.sourceId === symbolId);
-  const relatedIds = new Set<string>([symbolId]);
-  for (const edge of incoming) {
-    relatedIds.add(edge.sourceId);
-  }
-  for (const edge of outgoing) {
-    relatedIds.add(edge.targetId);
-  }
+
+  const incoming = model.edges.filter((edge) => edge.target === nodeId);
+  const outgoing = model.edges.filter((edge) => edge.source === nodeId);
+  const relatedIds = new Set<string>([nodeId]);
+  for (const edge of incoming) relatedIds.add(edge.source);
+  for (const edge of outgoing) relatedIds.add(edge.target);
   return { incoming, outgoing, relatedIds };
 }
 
-export function getReachableSubgraph(
-  model: ProjectGraphModel,
-  startId: string,
-  maxDepth = 3,
-): Set<string> {
-  const reached = new Set<string>([startId]);
-  let frontier = new Set<string>([startId]);
-  for (let depth = 0; depth < maxDepth; depth += 1) {
-    const next = new Set<string>();
-    for (const edge of model.edges) {
-      if (frontier.has(edge.sourceId) && !reached.has(edge.targetId)) {
-        reached.add(edge.targetId);
-        next.add(edge.targetId);
-      }
+export function searchNodes(model: CodeGraphModel, query: string): CodeGraphNode[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return [];
+  return model.nodes
+    .filter((node) =>
+      [
+        node.label,
+        node.subtitle,
+        node.qualifiedName ?? "",
+        node.filePath ?? "",
+        node.folderPath,
+        node.language ?? "",
+        node.role ?? "",
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalized),
+    )
+    .slice(0, 40);
+}
+
+export function edgeKindFromLabel(edge: GraphEdge): "call" | "arg" | "return" | "unknown" {
+  const kind = edgeKind(edge);
+  return kind === "call" || kind === "arg" || kind === "return" ? kind : "unknown";
+}
+
+function emptyModel(): CodeGraphModel {
+  return {
+    nodes: [],
+    edges: [],
+    folders: [],
+    files: [],
+    symbols: [],
+    variables: [],
+    projectFiles: [],
+    orphanEdgeCount: 0,
+  };
+}
+
+function normalizeProjectFiles(graph: DataFlowGraph): ProjectFile[] {
+  if (graph.project_files?.length) return graph.project_files;
+  return graph.nodes.map((node) => ({
+    id: node.id,
+    file_path: node.file_path,
+    file_name: node.file_name,
+    folder_path: node.folder_path,
+    language: node.language,
+    has_symbols: node.functions.length + node.classes.length > 0,
+    symbol_count:
+      node.functions.length +
+      node.classes.length +
+      node.classes.reduce((sum, cls) => sum + cls.methods.length, 0),
+  }));
+}
+
+function ensureFolderChain(
+  folderPath: string,
+  nodes: Map<string, CodeGraphNode>,
+  edges: Map<string, CodeGraphEdge>,
+): void {
+  const normalized = normalizeFolder(folderPath);
+  const parts = normalized ? normalized.split("/") : [];
+  if (!nodes.has("folder:root")) {
+    nodes.set("folder:root", {
+      id: "folder:root",
+      kind: "folder",
+      label: "root",
+      subtitle: "project root",
+      folderPath: "",
+      symbolCount: 0,
+      edgeCount: 0,
+    });
+  }
+
+  let parentId = "folder:root";
+  let current = "";
+  for (const part of parts) {
+    current = current ? `${current}/${part}` : part;
+    const id = folderId(current);
+    if (!nodes.has(id)) {
+      nodes.set(id, {
+        id,
+        kind: "folder",
+        label: part,
+        subtitle: current,
+        folderPath: current,
+        parentId,
+        symbolCount: 0,
+        edgeCount: 0,
+      });
     }
-    frontier = next;
-    if (frontier.size === 0) break;
+    addEdge(edges, {
+      id: `contains:${parentId}:${id}`,
+      source: parentId,
+      target: id,
+      kind: "contains",
+      label: "contains",
+    });
+    parentId = id;
   }
-  return reached;
 }
 
-export function edgeKindFromLabel(edge: GraphEdge): TraceEdgeKind {
-  if (edge.edge_type === "call" || edge.edge_type === "arg" || edge.edge_type === "return") {
-    return edge.edge_type;
-  }
-  const label = `${edge.edge_type} ${edge.label}`.toLowerCase();
-  if (label.includes("return")) return "return";
-  if (label.includes("arg") || label.includes(" -> ")) return "arg";
-  if (label.includes("call")) return "call";
-  return "unknown";
+function linkFolderToFile(
+  fileNode: CodeGraphNode,
+  nodes: Map<string, CodeGraphNode>,
+  edges: Map<string, CodeGraphEdge>,
+): void {
+  ensureFolderChain(fileNode.folderPath, nodes, edges);
+  const parentId = fileNode.folderPath ? folderId(fileNode.folderPath) : "folder:root";
+  addEdge(edges, {
+    id: `contains:${parentId}:${fileNode.id}`,
+    source: parentId,
+    target: fileNode.id,
+    kind: "contains",
+    label: "file",
+  });
 }
 
-function functionToSymbol(file: GraphNode, fn: FunctionNode): SymbolNode {
+function toFileNode(file: GraphNode): CodeGraphNode {
+  const symbolCount =
+    file.functions.length +
+    file.classes.length +
+    file.classes.reduce((sum, cls) => sum + cls.methods.length, 0);
+  return {
+    id: file.id,
+    kind: "file",
+    label: file.file_name,
+    subtitle: file.folder_path || "root",
+    folderPath: normalizeFolder(file.folder_path),
+    fileId: file.id,
+    filePath: file.file_path,
+    fileName: file.file_name,
+    language: file.language,
+    role: file.architecture_role,
+    symbolCount,
+    edgeCount: 0,
+    source: file,
+  };
+}
+
+function toProjectFileNode(file: ProjectFile): CodeGraphNode {
+  return {
+    id: file.id,
+    kind: "file",
+    label: file.file_name,
+    subtitle: file.folder_path || "root",
+    folderPath: normalizeFolder(file.folder_path),
+    fileId: file.id,
+    filePath: file.file_path,
+    fileName: file.file_name,
+    language: file.language,
+    role: file.has_symbols ? "module" : "source",
+    symbolCount: file.symbol_count,
+    edgeCount: 0,
+    source: file,
+  };
+}
+
+function toFunctionNode(file: GraphNode, fn: FunctionNode): CodeGraphNode {
   return {
     id: fn.id,
-    name: fn.name,
-    qualifiedName: fn.qualified_name ?? fn.id,
     kind: "function",
+    label: fn.name,
+    subtitle: file.file_name,
+    folderPath: normalizeFolder(file.folder_path),
     fileId: file.id,
     filePath: file.file_path,
     fileName: file.file_name,
-    folderPath: file.folder_path || "(root)",
     language: file.language,
     role: file.architecture_role,
-    params: fn.params,
-    returnType: fn.return_type,
-    description: fn.description,
+    parentId: file.id,
+    qualifiedName: fn.qualified_name ?? fn.id,
     startLine: fn.start_line ?? null,
     endLine: fn.end_line ?? null,
+    params: fn.params,
+    returnType: fn.return_type,
+    edgeCount: 0,
+    source: fn,
   };
 }
 
-function classToSymbol(file: GraphNode, cls: ClassNode): SymbolNode {
+function toClassNode(file: GraphNode, cls: ClassNode): CodeGraphNode {
   return {
     id: cls.id,
-    name: cls.name,
-    qualifiedName: cls.qualified_name ?? cls.id,
     kind: "class",
+    label: cls.name,
+    subtitle: file.file_name,
+    folderPath: normalizeFolder(file.folder_path),
     fileId: file.id,
     filePath: file.file_path,
     fileName: file.file_name,
-    folderPath: file.folder_path || "(root)",
     language: file.language,
     role: file.architecture_role,
-    params: [],
-    returnType: "class",
-    description: `${cls.name} in ${file.file_name}`,
+    parentId: file.id,
+    qualifiedName: cls.qualified_name ?? cls.id,
     startLine: cls.start_line ?? null,
     endLine: cls.end_line ?? null,
+    returnType: "class",
+    symbolCount: cls.methods.length,
+    edgeCount: 0,
+    source: cls,
   };
 }
 
-function methodToSymbol(file: GraphNode, cls: ClassNode, method: MethodNode): SymbolNode {
+function toMethodNode(file: GraphNode, cls: ClassNode, method: MethodNode): CodeGraphNode {
   return {
     id: method.id,
-    name: method.name,
-    qualifiedName: method.qualified_name ?? method.id,
     kind: "method",
+    label: method.name,
+    subtitle: cls.name,
+    folderPath: normalizeFolder(file.folder_path),
     fileId: file.id,
     filePath: file.file_path,
     fileName: file.file_name,
-    folderPath: file.folder_path || "(root)",
     language: file.language,
     role: file.architecture_role,
-    params: method.params,
-    returnType: method.return_type,
-    description: method.description,
+    parentId: cls.id,
+    qualifiedName: method.qualified_name ?? method.id,
     startLine: method.start_line ?? null,
     endLine: method.end_line ?? null,
-    parentClassId: cls.id,
-    parentClassName: cls.name,
+    params: method.params,
+    returnType: method.return_type,
+    edgeCount: 0,
+    source: method,
   };
 }
 
-function toTraceEdge(edge: GraphEdge): TraceEdge {
-  const kind = edgeKindFromLabel(edge);
-  const sourceSlot = edge.source_slot ?? null;
-  const targetSlot = edge.target_slot ?? null;
-  const label = traceEdgeLabel(kind, edge.label, sourceSlot, targetSlot);
+function toVariableNode(
+  edge: GraphEdge,
+  kind: "arg" | "return",
+  sourceNode?: CodeGraphNode,
+  targetNode?: CodeGraphNode,
+): CodeGraphNode {
+  const slot = kind === "arg" ? edge.source_slot || edge.variable_name : edge.target_slot || edge.variable_name;
+  const label = slot || (kind === "arg" ? "argument" : "return");
+  const owner = sourceNode?.filePath ? sourceNode : targetNode;
   return {
-    id: edge.id,
-    sourceId: edge.source_function_id,
-    targetId: edge.target_function_id,
-    sourceFileId: edge.source_node_id,
-    targetFileId: edge.target_node_id,
-    kind,
-    variableName: edge.variable_name || label || kind,
-    sourceSlot,
-    targetSlot,
-    dataType: edge.data_type || "Unknown",
+    id: `var:${edge.id}`,
+    kind: "variable",
     label,
-    lineNumber: edge.line_number ?? null,
-    isCrossFile: edge.source_node_id !== edge.target_node_id,
+    subtitle: edge.data_type || kind,
+    folderPath: owner?.folderPath ?? "",
+    fileId: owner?.fileId,
+    filePath: owner?.filePath,
+    fileName: owner?.fileName,
+    language: owner?.language,
+    role: "data-flow",
+    qualifiedName: edge.label,
+    returnType: edge.data_type,
+    edgeCount: 0,
   };
 }
 
-function traceEdgeLabel(
-  kind: TraceEdgeKind,
-  rawLabel: string,
-  sourceSlot: string | null,
-  targetSlot: string | null,
-): string {
-  if (kind === "arg") {
-    return `${sourceSlot || "arg"} -> ${targetSlot || "param"}`;
+function addEdge(edges: Map<string, CodeGraphEdge>, edge: CodeGraphEdge): void {
+  if (edge.source === edge.target) return;
+  edges.set(edge.id, edge);
+}
+
+function addEdgeCounts(nodes: CodeGraphNode[], edges: CodeGraphEdge[]): CodeGraphNode[] {
+  const counts = new Map<string, number>();
+  for (const edge of edges) {
+    counts.set(edge.source, (counts.get(edge.source) ?? 0) + 1);
+    counts.set(edge.target, (counts.get(edge.target) ?? 0) + 1);
   }
-  if (kind === "return") {
-    return `${sourceSlot || "return"} -> ${targetSlot || "result"}`;
-  }
-  return rawLabel || kind;
+  return nodes.map((node) => ({ ...node, edgeCount: counts.get(node.id) ?? 0 }));
+}
+
+function edgeKind(edge: GraphEdge): CodeEdgeKind {
+  if (edge.edge_type === "call") return "call";
+  if (edge.edge_type === "arg") return "arg";
+  if (edge.edge_type === "return") return "return";
+  if (edge.edge_type === "contains") return "contains";
+  if (edge.edge_type === "unresolved_call" || edge.resolution === "unresolved") return "unresolved";
+  return "reference";
+}
+
+function readableEdgeLabel(edge: GraphEdge): string {
+  if (edge.edge_type === "call") return edge.label || "calls";
+  if (edge.edge_type === "arg") return `${edge.source_slot || edge.variable_name || "arg"} -> ${edge.target_slot || "param"}`;
+  if (edge.edge_type === "return") return `${edge.source_slot || "return"} -> ${edge.target_slot || edge.variable_name || "result"}`;
+  return edge.label || edge.edge_type;
+}
+
+function folderId(folderPath: string): string {
+  return `folder:${normalizeFolder(folderPath) || "root"}`;
+}
+
+function normalizeFolder(folderPath: string): string {
+  return folderPath.replace(/\\/g, "/").replace(/^\.\/?/, "").replace(/\/$/, "");
 }

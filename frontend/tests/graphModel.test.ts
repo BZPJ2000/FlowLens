@@ -2,11 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  buildProjectGraphModel,
+  buildCodeGraphModel,
   edgeKindFromLabel,
   getGraphStats,
-  getReachableSubgraph,
-  getSymbolNeighborhood,
+  getNodeNeighborhood,
+  searchNodes,
 } from "../src/lib/graphModel.js";
 import type { DataFlowGraph } from "../src/types/index.js";
 
@@ -14,7 +14,7 @@ const graph: DataFlowGraph = {
   nodes: [
     {
       id: "file:math",
-      file_path: "E:/repo/math.ts",
+      file_path: "E:/repo/src/math.ts",
       file_name: "math.ts",
       folder_path: "src",
       language: "typescript",
@@ -45,7 +45,7 @@ const graph: DataFlowGraph = {
     },
     {
       id: "file:app",
-      file_path: "E:/repo/app.ts",
+      file_path: "E:/repo/src/app.ts",
       file_name: "app.ts",
       folder_path: "src",
       language: "typescript",
@@ -169,39 +169,46 @@ const graph: DataFlowGraph = {
   exit_points: ["file:math"],
 };
 
-test("buildProjectGraphModel expands files into symbols and value edges", () => {
-  const model = buildProjectGraphModel(graph);
+test("buildCodeGraphModel expands folders files symbols variables and relationships", () => {
+  const model = buildCodeGraphModel(graph);
   const stats = getGraphStats(model);
 
-  assert.equal(model.symbols.length, 4);
-  assert.equal(model.edges.length, 3);
-  assert.equal(model.orphanEdgeCount, 1);
-  assert.deepEqual(model.modules, ["src"]);
+  assert.equal(stats.folderCount, 2);
+  assert.equal(stats.fileCount, 2);
   assert.equal(stats.functionCount, 2);
   assert.equal(stats.classCount, 1);
   assert.equal(stats.methodCount, 1);
+  assert.equal(stats.variableCount, 2);
   assert.equal(stats.callCount, 1);
-  assert.equal(stats.argCount, 1);
-  assert.equal(stats.returnCount, 1);
-  assert.equal(stats.crossFileCount, 3);
+  assert.equal(stats.argCount, 2);
+  assert.equal(stats.returnCount, 2);
+  assert.equal(model.orphanEdgeCount, 1);
 });
 
-test("getSymbolNeighborhood returns incoming outgoing and related ids", () => {
-  const model = buildProjectGraphModel(graph);
-  const neighborhood = getSymbolNeighborhood(model, "app.checkout");
+test("getNodeNeighborhood returns adjacent ids for a symbol", () => {
+  const model = buildCodeGraphModel(graph);
+  const neighborhood = getNodeNeighborhood(model, "app.checkout");
 
-  assert.equal(neighborhood.outgoing.length, 2);
-  assert.equal(neighborhood.incoming.length, 1);
-  assert.ok(neighborhood.relatedIds.has("math.sum"));
+  assert.ok(neighborhood.outgoing.some((edge) => edge.target === "math.sum"));
+  assert.ok([...neighborhood.relatedIds].some((id) => id.startsWith("var:arg:checkout")));
 });
 
-test("getReachableSubgraph follows outgoing edges by depth", () => {
-  const model = buildProjectGraphModel(graph);
+test("variable nodes keep file ownership so file-scoped views can show data flow", () => {
+  const model = buildCodeGraphModel(graph);
+  const price = model.variables.find((node) => node.id === "var:arg:checkout:sum:price");
+  const total = model.variables.find((node) => node.id === "var:return:sum:checkout:total");
 
-  assert.deepEqual(Array.from(getReachableSubgraph(model, "app.checkout", 1)).sort(), [
-    "app.checkout",
-    "math.sum",
-  ]);
+  assert.equal(price?.fileId, "file:app");
+  assert.equal(price?.fileName, "app.ts");
+  assert.equal(total?.fileId, "file:math");
+  assert.equal(total?.fileName, "math.ts");
+});
+
+test("searchNodes finds symbols and files", () => {
+  const model = buildCodeGraphModel(graph);
+
+  assert.equal(searchNodes(model, "checkout")[0].id, "app.checkout");
+  assert.equal(searchNodes(model, "math.ts")[0].id, "file:math");
 });
 
 test("edgeKindFromLabel classifies fallback edge labels", () => {
@@ -216,7 +223,7 @@ test("edgeKindFromLabel classifies fallback edge labels", () => {
       target_function_id: "b.fn",
       variable_name: "value",
       data_type: "Unknown",
-      edge_type: "import",
+      edge_type: "return",
       label: "return value",
     }),
     "return",

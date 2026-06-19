@@ -1,6 +1,5 @@
 import type {
   AnalysisProgress,
-  ChatResult,
   DataFlowGraph,
   ImportResult,
   ProjectSummary,
@@ -29,16 +28,15 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export const api = {
   listProjects: () => request<ProjectSummary[]>("/projects"),
 
-  importLocalPath: (path: string) =>
-    request<ImportResult>("/projects/import", {
-      method: "POST",
-      body: JSON.stringify({ source_type: "local", source_url: path }),
+  deleteProject: (projectId: string) =>
+    request<{ status: string; project_id: string }>(`/projects/${projectId}`, {
+      method: "DELETE",
     }),
 
-  importFromUrl: (url: string) =>
+  importLocalPath: (sourcePath: string) =>
     request<ImportResult>("/projects/import", {
       method: "POST",
-      body: JSON.stringify({ source_type: "local", source_url: url }),
+      body: JSON.stringify({ source_type: "local", source_url: sourcePath }),
     }),
 
   importArchive: async (file: File) => {
@@ -61,7 +59,7 @@ export const api = {
   streamProgress: (
     analysisId: string,
     onProgress: (progress: AnalysisProgress) => void,
-    onError: () => void,
+    onError?: () => void,
   ) => {
     const events = new EventSource(`${BASE}/analyses/${analysisId}/stream`);
     events.onmessage = (event) => {
@@ -69,7 +67,7 @@ export const api = {
     };
     events.onerror = () => {
       events.close();
-      onError();
+      onError?.();
     };
     return events;
   },
@@ -88,19 +86,4 @@ export const api = {
     if (endLine != null) params.set("end_line", String(endLine));
     return request<SourceFile>(`/analyses/${analysisId}/source?${params.toString()}`);
   },
-
-  sendMessage: (
-    analysisId: string,
-    message: string,
-    sessionId?: string | null,
-    selectedSymbolIds: string[] = [],
-  ) =>
-    request<ChatResult>(`/analyses/${analysisId}/chat`, {
-      method: "POST",
-      body: JSON.stringify({
-        session_id: sessionId ?? null,
-        message,
-        selected_symbol_ids: selectedSymbolIds,
-      }),
-    }),
 };

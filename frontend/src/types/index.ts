@@ -88,14 +88,6 @@ export interface GraphEdge {
   label: string;
 }
 
-export interface DataFlowGraph {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-  entry_points: string[];
-  exit_points: string[];
-  project_files?: ProjectFile[];
-}
-
 export interface ProjectFile {
   id: string;
   file_path: string;
@@ -104,6 +96,14 @@ export interface ProjectFile {
   language: string;
   has_symbols: boolean;
   symbol_count: number;
+}
+
+export interface DataFlowGraph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  entry_points: string[];
+  exit_points: string[];
+  project_files?: ProjectFile[];
 }
 
 export interface ProjectSummary {
@@ -132,39 +132,10 @@ export interface AnalysisProgress {
   error_message?: string;
 }
 
-export interface AIFileAnalysis {
-  file_path: string;
-  summary: string;
-  detail: string;
-  inputs: {
-    name: string;
-    type: string;
-    source: string;
-    is_function: boolean;
-    description: string;
-  }[];
-  outputs: {
-    name: string;
-    type: string;
-    source: string;
-    is_function: boolean;
-    description: string;
-  }[];
-  internal_structures: Record<string, unknown>[];
-  architecture_role: string;
-  dependencies_summary: string;
-}
-
 export interface ImportResult {
   project_id: string;
   analysis_id: string;
   status: AnalysisStatus;
-}
-
-export interface ChatResult {
-  session_id: string;
-  reply: string;
-  referenced: string[];
 }
 
 export interface SourceFile {
